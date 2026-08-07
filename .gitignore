@@ -1,0 +1,12 @@
+venv/
+.env
+logs/*
+!logs/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+evaluation/reports/*
+!evaluation/reports/.gitkeep
+__pycache__/
+*.pyc
+.pytest_cache/
+.vscode/
