@@ -1,58 +1,44 @@
+"""
+config.py — central settings
+
+Responsibility: one place for env vars and pipeline-wide constants, so
+nothing downstream hardcodes a model name, a path, or a magic number
+that has to be found and changed in five files later.
+
+We deliberately keep this dependency-light (no pydantic-settings) since
+the project doesn't need validation/typing machinery yet — just reads
+env vars with sane defaults. Upgrade to pydantic BaseSettings later if
+config grows complex enough to need it (e.g. nested settings, secrets
+validation).
+"""
+
 import os
-from typing import List, Optional
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
 
+# --- Paths -------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_RAW_DIR = PROJECT_ROOT / "data" / "raw"
+DATA_PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 
-class Settings(BaseSettings):
-    """
-    Application Settings managed via Pydantic BaseSettings.
-    Automatically reads environment variables from .env file or environment.
-    """
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-        case_sensitive=False,
-    )
+# --- Embedding model -----------------------------------------------------
+# Multilingual model chosen deliberately: the corpus mixes Arabic
+# (regulatory articles) and English (course catalog) in the same
+# collection. An English-only model would badly under-represent the
+# Arabic content in embedding space. This model is local (no API key,
+# no per-call cost, fully reproducible) and specifically trained on
+# parallel multilingual data including Arabic.
+#
+# IMPORTANT: whatever model is used here MUST also be used at query
+# time in rag/retriever.py — embeddings from two different models are
+# not comparable in the same vector space. If you ever change this,
+# you must re-embed and re-upload the entire corpus, not just new docs.
+EMBEDDING_MODEL_NAME = os.getenv(
+    "EMBEDDING_MODEL_NAME", "paraphrase-multilingual-MiniLM-L12-v2"
+)
+EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "384"))  # matches the model above
+EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 
-    # General App Config
-    APP_NAME: str = Field(default="Faculty Assistant RAG")
-    ENVIRONMENT: str = Field(default="development")
-    DEBUG: bool = Field(default=True)
-    LOG_LEVEL: str = Field(default="INFO")
-
-    # API Configuration
-    API_V1_PREFIX: str = Field(default="/api/v1")
-    CORS_ORIGINS: List[str] = Field(default_factory=lambda: ["*"])
-
-    # Groq API Configuration
-    GROQ_API_KEY: str = Field(..., description="API key for Groq LLM service")
-    GROQ_MODEL_NAME: str = Field(default="llama3-70b-8192", description="Default Groq LLM model")
-
-    # Embedding Configuration
-    EMBEDDING_MODEL_NAME: str = Field(
-        default="BAAI/bge-small-en-v1.5",
-        description="HuggingFace model name or path for embeddings"
-    )
-    EMBEDDING_DIMENSION: int = Field(default=384, description="Vector dimension of embeddings")
-
-    # Pinecone Vector DB Configuration
-    PINECONE_API_KEY: str = Field(..., description="Pinecone API key")
-    PINECONE_ENVIRONMENT: Optional[str] = Field(default=None, description="Pinecone environment/region")
-    PINECONE_INDEX_NAME: str = Field(default="faculty-assistant-index", description="Target Pinecone index")
-
-    # RAG & Generation Parameters
-    TOP_K_RETRIEVAL: int = Field(default=5, description="Number of context chunks to retrieve")
-    MAX_TOKENS: int = Field(default=1024, description="Maximum completion tokens for LLM generation")
-    TEMPERATURE: float = Field(default=0.1, description="LLM sampling temperature")
-
-    # LangSmith / Observability
-    LANGCHAIN_TRACING_V2: bool = Field(default=False)
-    LANGCHAIN_ENDPOINT: str = Field(default="https://api.smith.langchain.com")
-    LANGCHAIN_API_KEY: Optional[str] = Field(default=None)
-    LANGCHAIN_PROJECT: str = Field(default="faculty-assistant")
-
-
-# Global Settings Instance
-settings = Settings()
+# --- Vector DB / LLM (used by later pipeline stages, not embed.py itself) --
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "faculty-assistant")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
