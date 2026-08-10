@@ -10,7 +10,7 @@ streamlit>=1.32.0
 
 # LLM, Embedding & Vector DB Clients
 groq>=0.4.2
-pinecone-client>=3.1.0
+pinecone>=6.0.0
 sentence-transformers>=2.5.1
 langchain>=0.1.12
 langchain-community>=0.0.28
