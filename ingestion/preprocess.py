@@ -124,9 +124,30 @@ class CleanedPage:
 def _normalize_line(line: str) -> str:
     """Collapse whitespace/digits so near-identical headers (which often
     contain a changing page number) still hash to the same bucket."""
+    line = _strip_invisible_controls(line)
     line = re.sub(r"\d+", "#", line.strip())
     line = re.sub(r"\s+", " ", line)
     return line
+
+
+# Unicode bidi/formatting control characters that PDF text streams for
+# Arabic documents frequently embed (RLM/LRM marks, directional
+# embedding/override/isolate marks). These are INVISIBLE when rendered
+# but are real characters in the extracted string, and Python's regex
+# \s does NOT match them — confirmed against real output: a U+200F
+# (Right-to-Left Mark) sitting between a newline and "مادة" silently
+# broke our article-boundary regex's start-of-line anchor, causing
+# article 3 (and others) to be missed even though the bracket text
+# itself was perfectly intact. This is a normalization concern, not a
+# chunking concern, so it's fixed here rather than patched into every
+# downstream regex that needs a clean line start.
+_INVISIBLE_CONTROLS = re.compile(
+    "[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]"
+)
+
+
+def _strip_invisible_controls(text: str) -> str:
+    return _INVISIBLE_CONTROLS.sub("", text)
 
 
 def detect_boilerplate_lines(pages: list[dict], min_frequency: float = 0.6) -> set[str]:
@@ -148,8 +169,20 @@ def detect_boilerplate_lines(pages: list[dict], min_frequency: float = 0.6) -> s
     for page in pages:
         seen_this_page = set()
         for raw_line in page["text"].splitlines():
+            stripped = raw_line.strip()
+            # Guard against empty/trivial lines using the RAW line length,
+            # not the normalized one. Bug found via real output: a bare
+            # page-number line like "30" normalizes to "#" (single char),
+            # which the OLD guard (checking normalized length) discarded
+            # before it ever got counted — meaning pure-digit page-number
+            # lines could never be detected as boilerplate no matter how
+            # often they repeated. Confirmed cause of stray "30"/"31"
+            # page-number fragments leaking into course Prerequisites
+            # fields in real chunk output.
+            if len(stripped) < 1:
+                continue
             norm = _normalize_line(raw_line)
-            if not norm or len(norm) < 3:
+            if not norm:
                 continue
             if norm not in seen_this_page:
                 line_counts[norm] += 1
@@ -174,7 +207,7 @@ def clean_page_text(text: str, boilerplate: set[str], apply_bidi_fix: bool) -> s
         norm = _normalize_line(raw_line)
         if norm in boilerplate:
             continue
-        stripped = raw_line.strip()
+        stripped = _strip_invisible_controls(raw_line).strip()
         if not stripped:
             continue
         if apply_bidi_fix:
