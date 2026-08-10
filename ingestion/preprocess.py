@@ -1,46 +1,20 @@
 """
-preprocess.py — mechanical cleanup only
+preprocess.py — mechanical cleanup and text normalization
 
-Responsibility: strip content that is positionally repetitive and
-carries zero retrieval value (headers, footers, page-number lines,
-watermark text, university seal captions) and normalize whitespace.
+Responsibility: Remove repetitive non-retrieval content (headers, footers, 
+page numbers, watermarks) and apply script-aware text normalization.
 
-CRITICAL BOUNDARY: this module does NOT deduplicate semantically
-similar content across documents (e.g. the GPA article appearing in
-both the AI and SWE docs). That is a downstream, embedding-based
-step that runs AFTER chunking, because you need chunk-level units to
-compare, not raw page text. Conflating the two here would make this
-stage untestable and would throw away information the dedup step
-needs (i.e. which program each chunk came from).
+CRITICAL BOUNDARY: Does NOT perform semantic deduplication across documents. 
+Cross-document deduplication runs after chunking; removing duplicates at the 
+document level destroys program-specific context metadata.
 
 Design notes:
-- We detect headers/footers by FREQUENCY, not by hardcoding strings.
-  A line that appears near-identically on >60% of pages is almost
-  certainly boilerplate (running header, page number, seal caption),
-  regardless of language. This generalizes across your AI, SWE, and
-  biomedical docs without you having to hand-write Arabic string
-  matches for each new document.
-- We deliberately do NOT strip anything that appears in <60% of
-  pages — a GPA formula that happens to repeat because it's discussed
-  in 3 different articles is not the same thing as a running header
-  on every single page. Frequency threshold is the safety margin.
-
-- BIDI (Arabic reading-order) CORRECTION, applied ONLY to pages where
-  extraction_method == "text_layer": pdfplumber streams PDF content
-  in the order glyphs appear in the file's content stream, which for
-  Arabic text is often visual (RTL-rendered) order rather than
-  logical reading order. The result is that a correct sentence like
-  "جامعة المنصورة كلية الحاسبات والمعلومات" comes out reversed. A
-  full-line character reversal fixes this reliably for these
-  documents (confirmed against real extracted output).
-  We do NOT apply this to OCR-extracted pages — Tesseract's layout
-  analysis already outputs correct logical reading order, so
-  reversing it again would re-break it.
-  We do NOT blanket-reverse every line either, since these documents
-  mix Arabic with English (course codes like "CS1001", table
-  headers). Reversing "CS1001" would corrupt it. Instead we classify
-  each line by its majority script and only reverse Arabic-majority
-  lines.
+- FREQUENCY-BASED BOILERPLATE DETECTION: Automatically identifies and strips 
+  headers/footers appearing on >60% of pages, eliminating hardcoded string 
+  matching across multi-language (Arabic/English) documents.
+- SCRIPT-AWARE BIDI CORRECTION: Reverses text-layer Arabic lines to fix 
+  RTL visual rendering issues while keeping OCR outputs and mixed English 
+  tokens (e.g., "CS1001") untouched.
 """
 
 import re

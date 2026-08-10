@@ -1,41 +1,18 @@
 """
 extract.py — PDF text extraction
 
-Responsibility: turn a raw PDF into a list of per-page text blocks.
-Nothing else. No cleaning, no chunking, no zone detection here —
-keeping this stage dumb and traceable makes every later stage easier
-to debug, because you can always ask "what page did this text
-actually come from?"
+Responsibility: Convert raw PDFs into structured, page-by-page text blocks 
+without applying cleaning, chunking, or text transformations.
 
 Design notes:
-- We use pdfplumber (not PyPDF2) because these documents are heavily
-  tabular (credit-hour tables, course listings) and pdfplumber's
-  layout-aware extraction handles multi-column / table-like content
-  far more reliably than a naive text-stream extractor.
-- Arabic + English mixed content: pdfplumber preserves character
-  order as laid out in the PDF content stream. Arabic RTL rendering
-  quirks (e.g. reversed word order in extracted text) are a known
-  issue with many PDF libraries. We do NOT attempt to fix bidi
-  ordering here — that's a preprocessing/normalization concern, not
-  an extraction concern (see preprocess.py). Keeping extraction and
-  bidi-correction as separate stages means we can unit test each in
-  isolation, and swap the OCR engine later without touching bidi logic.
-
-- OCR FALLBACK: some source PDFs in this project (confirmed: the AI
-  program document) are scanned page images with no embedded text
-  layer at all — pdfplumber returns "" for every page. Rather than
-  failing silently (a pipeline that "succeeds" with empty chunks is
-  worse than one that errors loudly), we detect empty-text pages and
-  re-run them through Tesseract OCR on a rasterized image of that
-  page. This makes extract.py robust to the third (biomedical) PDF
-  turning out to be scanned too, without needing to know in advance
-  which documents are "text" PDFs vs "image" PDFs.
-- OCR is meaningfully slower and lower-fidelity than native text
-  extraction (expect occasional character-level errors, especially
-  on stamps/seals/handwriting). We tag every page with how it was
-  extracted (`extraction_method`) so downstream quality issues can be
-  traced back to "this came from OCR" vs "this came from the text
-  layer" instead of being a mystery.
+- LAYOUT-AWARE EXTRACTION: Uses pdfplumber over standard text-stream extractors 
+  to reliably preserve structure in tabular, credit-hour, and multi-column documents.
+- ISOLATED PIPELINE BOUNDARY: Leaves text normalization and BiDi (Arabic RTL) 
+  corrections entirely to preprocess.py, keeping extraction traceable and testable.
+- AUTOMATIC OCR FALLBACK: Detects scanned/empty PDF pages and reruns them 
+  through Tesseract OCR via page rasterization.
+- AUDITABLE METADATA: Tags each page with its extraction source 
+  (`extraction_method`: "text_layer" vs. "ocr") for downstream quality tracing.
 """
 
 from dataclasses import dataclass, field

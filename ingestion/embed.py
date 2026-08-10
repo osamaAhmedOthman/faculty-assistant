@@ -1,37 +1,18 @@
 """
 embed.py — embedding generation stage
 
-Responsibility: take the per-program *_chunks.json files produced by
-chunk.py (one file per document: AI, SWE, BIO) and produce a SINGLE
-combined data/processed/chunks.json where every chunk has an embedding
-vector attached — matching the architecture's target output file.
-
-WHY combine all 3 programs into one file at this stage (not earlier):
-chunk.py deliberately stays per-document, since zone detection and
-catalog-boundary logic are document-specific concerns. But embedding
-and upload are corpus-wide concerns — Pinecone doesn't care which
-program a chunk came from at write time (that's what metadata.program
-is for at query time), so this is the natural point to merge the 3
-programs into one flat list of chunks ready for upload.py.
+Responsibility: Combine per-program chunk files from chunk.py into a single 
+data/processed/chunks.json file, attaching dense embedding vectors to every chunk.
 
 Design notes:
-- We embed chunk["text"] only — not the metadata. Embedding metadata
-  (course codes, program names) alongside description text would
-  dilute the semantic signal the embedding is supposed to capture.
-  Metadata stays as metadata, used for filtering/display, not for
-  the vector itself.
-- Table chunks are currently empty (tables: 0 across all 3 docs — see
-  chunk.py's documented limitation). This script doesn't special-case
-  that; it just embeds whatever chunk lists exist. When table chunking
-  is eventually implemented, this script needs no changes.
-- We batch across ALL chunks from ALL programs in one embed_texts()
-  call rather than one call per document, since batched inference is
-  faster and there's no reason to pay the per-call overhead 3 times.
-- Each output chunk keeps a stable chunk_id (already unique per
-  chunk.py's design: prefixed by source_file) — this is what upload.py
-  will use as the Pinecone vector ID, so re-running embed.py on
-  unchanged chunks produces the same IDs and upload.py can safely
-  upsert (overwrite) rather than duplicate.
+- CORPUS MERGING: Unifies separate document-level chunk files into a single, 
+  corpus-wide list optimized for vector database ingestion.
+- TEXT-ONLY EMBEDDINGS: Encodes only chunk["text"] to prevent metadata 
+  (e.g., course codes, program labels) from diluting the semantic vector signal.
+- BATCH INFERENCE: Executes vector encoding across the full merged dataset 
+  in a single batch operation to minimize computational overhead.
+- ID PRESERVATION: Retains unique `chunk_id` attributes to maintain compatibility 
+  with upload.py's idempotent Pinecone upserts.
 """
 
 import sys

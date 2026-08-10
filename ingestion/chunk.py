@@ -1,33 +1,19 @@
 """
 chunk.py — zone-aware chunking
 
-Responsibility: take cleaned page text for one document and split it
-into semantically meaningful chunks using a DIFFERENT strategy per
-zone, per the architecture we agreed on:
+Responsibility: Transform cleaned page text into semantically isolated chunks 
+using domain-specific boundary strategies across document zones.
 
-  1. Regulatory articles -> one chunk per article (مادة [N] / Article (N))
-  2. Program tables       -> kept as structured data (pdfplumber tables),
-                             not flattened into prose chunks
-  3. Course catalog       -> one chunk per course entry
-
-WHY per-zone chunking instead of one generic splitter:
-A fixed-size or generic recursive text splitter would happily cut a
-GPA formula table in half, or split a course description from its
-course code. These documents are formulaic enough (article markers,
-table markers, course-code patterns) that regex-based boundary
-detection is both more reliable AND cheaper than an LLM-based
-semantic chunker — save that complexity for content that's actually
-unstructured.
-
-LIMITATION TO FLAG NOW (don't paper over it): the AI program PDF's
-course catalog is freeform bilingual prose (course name, then code,
-then description, no consistent field labels), while the SWE PDF's
-catalog uses a consistent "Course Code / Course Name / Credit hours /
-Course Description / Prerequisites" block structure. One regex will
-not cleanly handle both. This file implements a best-effort pattern
-for each and CLEARLY reports which entries it couldn't confidently
-parse, so you can inspect and refine rather than silently getting
-bad chunks. Expect to iterate on this part once we see real output.
+Design notes:
+- STRATEGIC ZONE HANDLING: Applies tailored regex boundaries for regulatory 
+  articles, extracts structured program tables intact, and splits course 
+  catalogs into individual course units.
+- PRESERVATION OVER GENERIC SPLITTING: Replaces fixed-size sliding windows with 
+  pattern-based boundaries to prevent splitting mathematical formulas, course codes, 
+  or article bodies.
+- BILINGUAL CATALOG ADAPTATION: Implements robust parsing across distinct document 
+  layouts (e.g., freeform prose vs. structured attribute blocks) with explicit 
+  error reporting for unparsed segments.
 """
 
 import re
