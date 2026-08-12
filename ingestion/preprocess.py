@@ -1,26 +1,23 @@
 """
 preprocess.py — mechanical cleanup and text normalization
 
-Responsibility: Remove repetitive non-retrieval content (headers, footers, 
-page numbers, watermarks) and apply script-aware text normalization.
+Responsibility: Strip positionally repetitive boilerplate (headers, footers, 
+page numbers) and apply script-aware text normalization to raw page text.
 
-CRITICAL BOUNDARY: Does NOT perform semantic deduplication across documents. 
-Cross-document deduplication runs after chunking; removing duplicates at the 
-document level destroys program-specific context metadata.
+CRITICAL BOUNDARY: Does NOT perform cross-document semantic deduplication; 
+preserving program-specific provenance requires evaluating duplicates post-chunking.
 
 Design notes:
-- FREQUENCY-BASED BOILERPLATE DETECTION: Automatically identifies and strips 
-  headers/footers appearing on >60% of pages, eliminating hardcoded string 
-  matching across multi-language (Arabic/English) documents.
-- SCRIPT-AWARE BIDI CORRECTION: Reverses text-layer Arabic lines to fix 
-  RTL visual rendering issues while keeping OCR outputs and mixed English 
-  tokens (e.g., "CS1001") untouched.
+- FREQUENCY-BASED BOILERPLATE DETECTION: Strips lines appearing on >60% of pages 
+  to automatically eliminate headers and footers without hardcoded string patterns.
+- SELECTIVE BIDI CORRECTION: Reverses visual-order Arabic lines extracted via text-layer 
+  streaming while bypassing OCR outputs and English-majority tokens (e.g., "CS1001").
 """
 
 import re
 import unicodedata
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 # Unicode block for Arabic script (covers standard Arabic letters).
@@ -54,26 +51,16 @@ _RUN_PATTERN = re.compile(r"[\u0600-\u06FF]+|[^\u0600-\u06FF]+")
 
 def fix_bidi_line(line: str) -> str:
     """
-    Restore logical reading order for an Arabic-majority line that was
-    extracted in visual (mirrored) order by pdfplumber.
+    Restore logical reading order for visual-order Arabic lines extracted by pdfplumber.
 
-    Verified against real output: naive line[::-1] corrupts embedded
-    digit/English runs (e.g. credit-hour figure "135" became "531").
-    This version instead:
-      1. Splits the line into runs of (Arabic-script | everything else)
-      2. Reverses the ORDER of runs (fixes RTL sentence-level ordering)
-      3. Within each Arabic run, reverses characters (Arabic words were
-         individually mirrored too, since pdfplumber has no bidi logic)
-      4. Within each non-Arabic run, leaves character order untouched
-         (digits/English were already correct internally)
+    Responsibility: Fix mirrored RTL text while preserving embedded LTR tokens (digits, course codes).
 
-    This is still not a full Unicode BiDi algorithm implementation
-    (that would need to handle nested embedding levels, numbers with
-    embedded commas/decimals, mixed punctuation direction, etc. — see
-    the `python-bidi` package if this ever proves insufficient). It's
-    a targeted fix for the specific mis-extraction pattern these
-    documents exhibit, verified against real extracted text.
-    """
+    Design notes:
+    - RUN-BASED PARSING: Splits lines into distinct Arabic and non-Arabic token segments.
+    - SEGMENT REVERSAL: Reverses sentence-level run order and character order within Arabic segments.
+    - LTR PRESERVATION: Leaves digit and English character sequences (e.g., "135", "CS100") 
+    unmodified to prevent corrupting credit-hour figures and course codes.
+    """ 
     if not _is_arabic_majority_line(line):
         return line
 
@@ -93,6 +80,7 @@ class CleanedPage:
     source_file: str
     page_number: int
     text: str
+    tables: list = field(default_factory=list)
 
 
 def _normalize_line(line: str) -> str:
@@ -104,17 +92,18 @@ def _normalize_line(line: str) -> str:
     return line
 
 
-# Unicode bidi/formatting control characters that PDF text streams for
-# Arabic documents frequently embed (RLM/LRM marks, directional
-# embedding/override/isolate marks). These are INVISIBLE when rendered
-# but are real characters in the extracted string, and Python's regex
-# \s does NOT match them — confirmed against real output: a U+200F
-# (Right-to-Left Mark) sitting between a newline and "مادة" silently
-# broke our article-boundary regex's start-of-line anchor, causing
-# article 3 (and others) to be missed even though the bracket text
-# itself was perfectly intact. This is a normalization concern, not a
-# chunking concern, so it's fixed here rather than patched into every
-# downstream regex that needs a clean line start.
+"""
+Strip invisible Unicode BiDi and formatting control characters from extracted text streams.
+
+Responsibility: Eliminate non-printing directional marks (e.g., U+200F RLM, LRM, directional isolates) 
+that corrupt string anchor matching in downstream regex operations.
+
+Design notes:
+- REGEX BOUNDARY PRESERVATION: Removes embedded control characters that sit between whitespace 
+  and structural markers (e.g., article boundaries like "مادة") to ensure clean line-start anchors.
+- NORMALIZATION ISOLATION: Normalizes control characters during cleanup to keep downstream 
+  regex patterns clean and prevent repetitive inline character stripping.
+"""
 _INVISIBLE_CONTROLS = re.compile(
     "[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]"
 )
@@ -145,14 +134,11 @@ def detect_boilerplate_lines(pages: list[dict], min_frequency: float = 0.6) -> s
         for raw_line in page["text"].splitlines():
             stripped = raw_line.strip()
             # Guard against empty/trivial lines using the RAW line length,
-            # not the normalized one. Bug found via real output: a bare
-            # page-number line like "30" normalizes to "#" (single char),
-            # which the OLD guard (checking normalized length) discarded
-            # before it ever got counted — meaning pure-digit page-number
-            # lines could never be detected as boilerplate no matter how
-            # often they repeated. Confirmed cause of stray "30"/"31"
-            # page-number fragments leaking into course Prerequisites
-            # fields in real chunk output.
+            # not the normalized one. A bare page-number line like "30"
+            # normalizes to "#" (a single character) — checking the
+            # normalized length would discard it before it's ever counted,
+            # which would make pure-digit page-number lines undetectable
+            # as boilerplate no matter how often they repeat across pages.
             if len(stripped) < 1:
                 continue
             norm = _normalize_line(raw_line)
@@ -193,20 +179,46 @@ def clean_page_text(text: str, boilerplate: set[str], apply_bidi_fix: bool) -> s
     return cleaned
 
 
+def clean_table_cells(table: list, apply_bidi_fix: bool) -> list:
+    """
+    Pass raw pdfplumber table rows through, applying the same bidi
+    correction used on page text to any Arabic-majority cell strings.
+
+    pdfplumber's extract_tables() returns raw cell text completely
+    independent of the page-text extraction path, so it needs the same
+    per-cell correction fix_bidi_line applies to page lines. Numeric
+    and English cells (course codes, credit-hour numbers) pass through
+    unchanged, same logic as fix_bidi_line's line-level handling. This
+    preserves table structure end-to-end so chunk.py's table-aware
+    course parser has clean rows to work with.
+    """
+    cleaned_table = []
+    for row in table:
+        cleaned_row = []
+        for cell in row:
+            if isinstance(cell, str) and cell.strip():
+                fixed = fix_bidi_line(cell.strip()) if apply_bidi_fix else cell.strip()
+                cleaned_row.append(fixed)
+            else:
+                cleaned_row.append(cell)
+        cleaned_table.append(cleaned_row)
+    return cleaned_table
+
+
 def preprocess_document(pages: list[dict], min_frequency: float = 0.6) -> list[CleanedPage]:
     """
-    Full preprocessing pass for one document's extracted pages.
+    Full preprocessing pass for a single document's extracted pages.
 
-    Takes the output of extract.extract_to_dict() and returns cleaned
-    pages with boilerplate stripped and Arabic reading order corrected
-    where needed. Run this per-document (not across all 3 program PDFs
-    at once) since header/footer text differs between the AI, SWE, and
-    biomedical documents.
+    Responsibility: Strip boilerplate, fix Arabic reading order, and preserve 
+    structured table data across extracted pages on a per-document basis.
 
-    Expects each page dict to include "extraction_method" (added by
-    extract.py) so we know whether to apply the bidi fix. Pages missing
-    this key default to applying the fix (safe default: most of these
-    documents' native PDFs need it).
+    Design notes:
+    - DOCUMENT-SCOPED BOILERPLATE DETECT: Scopes header/footer frequency analysis 
+    to individual documents to prevent cross-program pattern pollution.
+    - PRESERVED TABLE DATA: Carries forward extracted tables in `CleanedPage.tables` 
+    with cell-level BiDi corrections for downstream parsing in chunk.py.
+    - SAFE METHOD FALLBACK: Evaluates `extraction_method` per page, defaulting to BiDi 
+    correction when the flag is absent.
     """
     boilerplate = detect_boilerplate_lines(pages, min_frequency=min_frequency)
 
@@ -217,6 +229,10 @@ def preprocess_document(pages: list[dict], min_frequency: float = 0.6) -> list[C
             text=clean_page_text(
                 page["text"],
                 boilerplate,
+                apply_bidi_fix=(page.get("extraction_method", "text_layer") == "text_layer"),
+            ),
+            tables=clean_table_cells(
+                page.get("tables", []),
                 apply_bidi_fix=(page.get("extraction_method", "text_layer") == "text_layer"),
             ),
         )
