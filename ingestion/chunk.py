@@ -24,6 +24,13 @@ class Chunk:
 # Zone 1: Regulatory articles
 # ---------------------------------------------------------------------------
 
+# An article's chunk beyond this length likely inline-references table
+# content rather than being pure regulatory prose (see
+# chunk_regulatory_articles). Chosen as a generous multiple of a
+# typical single-article chunk length, not tuned to any specific
+# article number.
+MAX_ARTICLE_CHARS = 1500
+
 # Match article headers like "مادة 13" or "Article (12)".
 # Tolerant to OCR/BiDi noise; anchored at line start for precision.
 ARTICLE_PATTERN = re.compile(
@@ -32,28 +39,55 @@ ARTICLE_PATTERN = re.compile(
 )
 
 
-def chunk_regulatory_articles(full_text: str, program: str, source_file: str) -> list[Chunk]:
+def chunk_regulatory_articles(full_text: str, program: str, source_file: str) -> tuple[list[Chunk], list[str]]:
     """
     Split full document text into one chunk per regulatory article.
 
     Strategy: find every article marker position, then each chunk spans
-    from one marker to the start of the next. The LAST article's chunk
-    will run into whatever follows it in the document (tables/catalog) —
-    callers should only pass this function the text up through the end
-    of the regulatory section, not the whole document. (In practice: run
-    zone detection first, see classify_zones() below.)
+    from one marker to the start of the next. An article positioned
+    immediately before the course catalog is additionally bounded at
+    the catalog's start (first "Course Code" occurrence) — otherwise,
+    since the next article marker may not appear again until after the
+    entire catalog, that article's span would swallow the whole
+    catalog while waiting for it.
+
+    An article can still legitimately reference several tables inline
+    (e.g. "Table 4 shows the credit hours required...") without a text
+    marker separating its own prose from that table content, so the
+    catalog-start bound alone doesn't guarantee a small chunk. Rather
+    than guess where an article's prose ends and referenced table
+    content begins, an oversized result is truncated at
+    MAX_ARTICLE_CHARS and flagged in the returned warnings list —
+    consistent with this file's "flag it, don't fix it in the dark"
+    approach elsewhere. The full table data is not lost: chunk_tables()
+    captures it separately and correctly regardless of this bound.
+
+    Returns (chunks, warnings).
     """
     matches = list(ARTICLE_PATTERN.finditer(full_text))
+    catalog_marker = re.search(r"Course Code", full_text)
+    catalog_start = catalog_marker.start() if catalog_marker else None
     chunks = []
+    warnings = []
 
     for i, match in enumerate(matches):
         article_num = match.group(1)
         start = match.start()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(full_text)
+        if catalog_start is not None and start < catalog_start < end:
+            end = catalog_start
         article_text = full_text[start:end].strip()
 
         if len(article_text) < 20:  # guard against spurious matches
             continue
+
+        if len(article_text) > MAX_ARTICLE_CHARS:
+            warnings.append(
+                f"Article {article_num} truncated at {MAX_ARTICLE_CHARS} chars "
+                f"(was {len(article_text)}) — likely inline-references table content; "
+                f"see table_chunks for the full table data."
+            )
+            article_text = article_text[:MAX_ARTICLE_CHARS].strip()
 
         chunks.append(
             Chunk(
@@ -68,7 +102,7 @@ def chunk_regulatory_articles(full_text: str, program: str, source_file: str) ->
             )
         )
 
-    return chunks
+    return chunks, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +539,7 @@ def chunk_document(cleaned_pages: list[dict], program: str, source_file: str) ->
     """
     full_text = "\n".join(p["text"] for p in cleaned_pages)
 
-    article_chunks = chunk_regulatory_articles(full_text, program, source_file)
+    article_chunks, article_warnings = chunk_regulatory_articles(full_text, program, source_file)
     table_chunks = chunk_tables(cleaned_pages, program, source_file)
 
     # Catalog-zone isolation. Course descriptions in this document
@@ -548,7 +582,8 @@ def chunk_document(cleaned_pages: list[dict], program: str, source_file: str) ->
     table_only = [c for c in table_course_chunks if c.metadata["course_code"] not in covered_codes]
     covered_codes |= {c.metadata["course_code"] for c in table_only}
 
-    freeform_chunks, warnings = chunk_course_catalog_freeform(catalog_text, program, source_file)
+    freeform_chunks, freeform_warnings = chunk_course_catalog_freeform(catalog_text, program, source_file)
+    warnings = article_warnings + freeform_warnings
     freeform_only = [c for c in freeform_chunks if c.metadata["course_code"] not in covered_codes]
 
     course_chunks = structured_course_chunks + table_only + freeform_only
