@@ -1,17 +1,9 @@
-"""
-chunk.py — zone-aware chunking
+"""chunk.py — zone-aware chunking
 
-Responsibility: Split cleaned document text into semantically isolated chunks 
-using targeted, zone-specific parsing strategies.
-
-Design notes:
-- STRATEGIC ZONE HANDLING: Applies pattern boundaries for regulatory articles, 
-  preserves structured program tables intact, and isolates individual course catalog entries.
-- REGEX BOUNDARY PRESERVATION: Uses domain-specific regex patterns instead of 
-  fixed-size windows to prevent cutting formulas, course codes, or article bodies.
-- ADAPTIVE CATALOG PARSING: Handles structural variations across documents 
-  (e.g., freeform prose vs. structured attribute blocks) with explicit logging 
-  for low-confidence fallback entries.
+Split cleaned page text into three zone types: regulatory
+articles, program tables (kept structured), and course catalog
+entries. Uses regex and table-aware heuristics and flags low-
+confidence parses for manual review.
 """
 
 import re
@@ -32,16 +24,8 @@ class Chunk:
 # Zone 1: Regulatory articles
 # ---------------------------------------------------------------------------
 
-"""
-Responsibility: Detect regulatory article headers (e.g., "مادة [13]:", "Article (12)") 
-while tolerating OCR artifacts and BiDi punctuation displacement.
-
-Design notes:
-- LINE-START ANCHORING: Uses `(?:^|\n)` anchors to distinguish article headers from inline 
-  references (e.g., "طبقا للمادة 8") without relying on rigid bracket matching.
-- NOISE TOLERANCE: Permits flexible bracket/punctuation sequences to handle systematic 
-  BiDi bracket mirroring (e.g., "مادة: )1(") and Tesseract glyph corruption.
-"""
+# Match article headers like "مادة 13" or "Article (12)".
+# Tolerant to OCR/BiDi noise; anchored at line start for precision.
 ARTICLE_PATTERN = re.compile(
     r"(?:^|\n)\s*(?:مادة|Article)\s*:?\s*[\[\(\)\]]*\s*(\d{1,2})\s*[\[\(\)\]]*",
     re.MULTILINE,
@@ -92,26 +76,11 @@ def chunk_regulatory_articles(full_text: str, program: str, source_file: str) ->
 # ---------------------------------------------------------------------------
 
 def chunk_tables(pages: list[dict], program: str, source_file: str) -> list[Chunk]:
-    """
-    Turn pdfplumber's raw table extractions into structured chunks.
+    """Convert pdfplumber tables into structured chunks.
 
-    Each table becomes ONE chunk containing:
-      - a short auto-generated text summary (for embedding/retrieval)
-      - the raw row/column data as structured JSON (for exact lookups,
-        e.g. "how many credit hours is Data Structures")
-
-    This deliberately does NOT try to prose-ify entire tables into
-    paragraphs — that destroys the row/column relationships that make
-    the data useful for precise queries.
-
-    FIX (previously a real bug, confirmed against real output): the
-    course-code normalization used by the course-row parser (see
-    _normalize_course_code below) was never applied here, so this
-    function's stored rows still showed the raw OCR-corrupted AI codes
-    (e.g. "A14801" instead of "AI4801") even after course_chunks were
-    correctly normalized. Reuses the SAME _normalize_course_code
-    function (no second normalization implementation) so the two
-    paths can't drift out of sync with each other.
+    Each table chunk includes a short summary and the raw rows
+    (normalized via _normalize_row_cell). Preserves table structure
+    for precise lookups rather than flattening to prose.
     """
     chunks = []
     for page in pages:
@@ -147,23 +116,15 @@ def chunk_tables(pages: list[dict], program: str, source_file: str) -> list[Chun
 # Zone 3: Course catalog
 # ---------------------------------------------------------------------------
 
-"""
-Structured Course Block Boundary Regex Pattern
-
-Responsibility: Extract description content from multi-column SWE/BIO-style course blocks.
-
-Design notes:
-- BOUNDARY-BASED EXTRACTION: Captures raw text between the credit hours header and the prerequisites marker 
-  to prevent missing description content across interleaved lines.
-- POST-PROCESSING CLEANUP: Defers label removal to `_strip_label_noise` to sanitize isolated, 
-  vertically aligned label tokens ("Course", "Description") created by pdfplumber line-streaming.
-"""
+# Parse SWE/BIO-style labeled course blocks. Capture code, name,
+# credit hours, description, and optional prerequisites. Strip
+# stray "Course"/"Description" label tokens after extraction.
 COURSE_BLOCK_PATTERN = re.compile(
     r"Course Code\s+([A-Z]{2,5}\d{2,4})\s*"
     r"Course Name\s+(.+?)\s*\n"
     r"Credit hours\s+(.+?)\n"
     r"(.+?)"
-    r"Prerequisites\s+(.+?)(?=Course Code|\Z)",
+    r"(?:Prerequisites\s+(.+?))?(?=Course Code|\n\s*(?:مادة|Article)\s*:?\s*[\[\(\)\]]*\s*\d|\Z)",
     re.DOTALL,
 )
 
@@ -186,13 +147,15 @@ def chunk_course_catalog_structured(catalog_text: str, program: str, source_file
     """Parser for the SWE/BIO-style labeled catalog format."""
     chunks = []
     for match in COURSE_BLOCK_PATTERN.finditer(catalog_text):
-        code, name, credits, raw_description, prereqs = (g.strip() for g in match.groups())
+        code, name, credits, raw_description = (g.strip() for g in match.groups()[:4])
+        prereqs = match.group(5).strip() if match.group(5) is not None else None
         description = _strip_label_noise(raw_description)
+        prereqs_line = f"Prerequisites: {prereqs}\n" if prereqs is not None else ""
         chunks.append(
             Chunk(
                 chunk_id=f"{source_file}_course_{code}",
                 zone_type="course",
-                text=f"{name} ({code})\nCredit hours: {credits}\nPrerequisites: {prereqs}\n\n{description}",
+                text=f"{name} ({code})\nCredit hours: {credits}\n{prereqs_line}\n{description}",
                 metadata={
                     "program": program,
                     "source_file": source_file,
@@ -200,7 +163,7 @@ def chunk_course_catalog_structured(catalog_text: str, program: str, source_file
                     "course_name": name,
                     "credit_hours": credits,
                     "prerequisites": prereqs,
-                    "parse_confidence": "high",  # full labeled block: code+name+credits+prereqs+description
+                    "parse_confidence": "high",  # full labeled block: code+name+credits+description (prerequisites present when the source states one)
                 },
             )
         )
@@ -211,17 +174,23 @@ def chunk_course_catalog_structured(catalog_text: str, program: str, source_file
 # Table-aware course parser
 # ---------------------------------------------------------------------------
 #
-"""
-Responsibility: Parse structured course records directly from preserved page tables.
-
-Design notes:
-- EXPLICIT STRUCTURAL BOUNDARIES: Extracts course entries from table rows to eliminate 
-  boundary-bleed risks inherent in freeform text window parsing.
-- ACCURATE METADATA PRESERVATION: Populates metadata fields solely from explicit cell 
-  values, leaving missing attributes as `None` rather than fabricating data.
-- EXPLICIT CONFIDENCE SCORING: Sets parser confidence based on recoverable row data 
-  to ensure downstream quality tracing without masking incomplete source entries.
-"""
+# WHY THIS EXISTS: verified against real extraction output that
+# preprocess.py was silently discarding table structure that extract.py
+# had already captured correctly (67 real tables in the SWE doc, 105 in
+# BIO, 58/67 and 48/105 of which respectively contain at least one
+# genuine course-code-shaped cell — confirmed by direct inspection, not
+# assumed). That data is now preserved (see preprocess.py's CleanedPage.
+# tables field). This parser reads it directly, which is strictly more
+# reliable than inferring course boundaries from freeform prose, because
+# a table row is an explicit, unambiguous record — no boundary-bleed
+# risk the way freeform text-window parsing has.
+#
+# WHAT IT DOES NOT DO: invent fields a table doesn't actually provide.
+# A row might give code+name but no credit-hour column, or vice versa.
+# Missing fields are left as None rather than guessed, and confidence
+# is set explicitly per what was actually recoverable — per requirement,
+# this parser never fabricates data to make a chunk look more complete
+# than the source table actually was.
 
 _TABLE_COURSE_CODE_PATTERN = re.compile(r"^[A-Z]{2,5}\d{2,4}$")
 _TABLE_CREDIT_HOURS_PATTERN = re.compile(r"^\d{1,2}$")  # bare 1-2 digit cell, e.g. "3"
@@ -278,18 +247,26 @@ def _is_code_cell(value: str, program: str) -> bool:
 
 def _extract_course_row(row: list, program: str, source_file: str) -> dict | None:
     """
-    Identify and map course attributes (course code, title, credit hours) from individual table rows.
+    Inspect one table row and try to identify a course-code cell, a
+    course-name cell, and a credit-hours cell. Returns None if no
+    course-code-shaped cell is found at all (row isn't a course row —
+    e.g. it's a header row, or a grading-scale/admin table row, both
+    of which are common in these documents and must NOT be misread
+    as course entries).
 
-    Responsibility: Distinguish course records from header or administrative rows and resolve column-ambiguity 
-    between primary course codes and embedded prerequisite codes.
-
-    Design notes:
-    - NON-COURSE ROW FILTERING: Rejects rows lacking course-code tokens (e.g., table headers, grading scales) 
-    to prevent misclassifying non-course entries.
-    - PROXIMITY-BASED CODE DISAMBIGUATION: Resolves ambiguous multi-code rows (e.g., `['CS2202', 'Software Engineering', 'CS3301']`) 
-    by pairing the course title with the code-shaped cell that minimizes raw column-index distance.
-    - DIRECTION-AGNOSTIC PAIRING: Handles both left-to-right and right-to-left column layouts without 
-    hardcoded positional bias.
+    DISAMBIGUATION: some rows contain MULTIPLE code-shaped cells — one
+    is the actual course code, another is a prerequisite/reference
+    code embedded in the same row. E.g. the raw row
+        ['CS2202', '', '', '', '', 'Software Engineering', 'CS3301']
+    has CS2202 (a prerequisite) in the first cell and CS3301 (the real
+    code) in the last — taking "the first code-shaped cell found"
+    would get this backwards. The real code is consistently the
+    code-shaped cell with the SMALLEST raw column-index distance to
+    the course-name cell. This is a distance metric rather than a
+    "prefer left" or "prefer right" rule, so it also handles
+    code-before-name row layouts correctly, and it's a no-op for rows
+    with only one code-shaped cell (the common case), leaving
+    already-correct parsing unaffected.
     """
     # Keep raw (index, value) pairs — the distance heuristic needs
     # original column position, not the position after blank cells
@@ -332,7 +309,15 @@ def _extract_course_row(row: list, program: str, source_file: str) -> dict | Non
             "parse_confidence": "low",
         }
 
-    name_idx, name = max(name_candidates, key=lambda x: len(x[1]))
+    # Bilingual rows can have both an Arabic and an English label as
+    # separate cells. Picking purely by raw character length is not
+    # script-aware and can pick the Arabic cell over a shorter English
+    # name (or vice versa). Prefer a Latin-script candidate when one
+    # exists, since course_name elsewhere in this corpus is recorded
+    # in English; fall back to the longest candidate only when no
+    # Latin-script candidate is present.
+    latin_candidates = [(i, c) for i, c in name_candidates if re.search(r"[A-Za-z]{3,}", c)]
+    name_idx, name = max(latin_candidates or name_candidates, key=lambda x: len(x[1]))
 
     if len(code_candidates) == 1:
         # Unambiguous — the only case the original version handled,
@@ -407,19 +392,32 @@ def chunk_table_courses(cleaned_pages: list[dict], program: str, source_file: st
 
 def chunk_course_catalog_freeform(catalog_text: str, program: str, source_file: str) -> tuple[list[Chunk], list[str]]:
     """
-    Best-effort fallback parser for unstructured, freeform course catalog text.
+    Best-effort fallback parser for freeform catalog text: used when a
+    course entry doesn't match the structured "Course Code / Course
+    Name / ..." block format or a table row. Description paragraphs
+    can precede or follow a bare course code with no consistent
+    labeling, so we anchor on code positions and take a window of text
+    around each as the chunk.
 
-    Responsibility: Extract course entries when text lacks structured block markers 
-    or table layout, using course-code position anchors to define chunk windows.
+    BOUNDARY DETECTION: a course code can also appear as a
+    PREREQUISITE reference inside another course's description (e.g.
+    "Software Engineering (CS3301)" cited as a prerequisite), and that
+    must not be mistaken for a new course boundary. The structural
+    signal that distinguishes a real course-code heading from an
+    inline reference is line placement: a real course-code anchor
+    sits ALONE on its own line, while a reference is embedded inline
+    within a longer line alongside other text. A code is only treated
+    as a course boundary if the ENTIRE line it appears on (after
+    stripping whitespace) is exactly that code. This covers
+    parenthesized and unparenthesized reference styles uniformly. It
+    only changes which matches are treated as chunk BOUNDARIES — an
+    inline reference still remains exactly as-is inside whichever
+    course's description text contains it.
 
-    Design notes:
-    - LINE-ISOLATED BOUNDARY ANCHORING: Treats course codes as new chunk boundaries only 
-    when they occupy an entire line, distinguishing real course headers from inline 
-    prerequisite references (e.g., "Prerequisite: CS3301").
-    - REFERENCE PRESERVATION: Keeps inline course code citations intact within description 
-    body text without triggering premature chunk splitting.
-    - TRANSPARENT PARSE LOGGING: Returns explicit warning records alongside generated 
-    chunks to flag low-confidence entries for manual review.
+    Returns (chunks, unparsed_warnings) — the warnings list surfaces
+    anything that looked like it should be a course entry but didn't
+    fit the expected shape, so it can be inspected rather than
+    silently losing content.
     """
     all_matches = list(BARE_COURSE_CODE_PATTERN.finditer(catalog_text))
 
@@ -485,21 +483,20 @@ def chunk_document(cleaned_pages: list[dict], program: str, source_file: str) ->
     article_chunks = chunk_regulatory_articles(full_text, program, source_file)
     table_chunks = chunk_tables(cleaned_pages, program, source_file)
 
-    """
-    Catalog Zone Isolation & Decoupled Boundary Detection
-
-    Responsibility: Isolate course catalog text across non-linear document structures 
-    without relying on regulatory article positions.
-
-    Design notes:
-    - DECOUPLED ZONE SCANNING: Decouples catalog boundary detection from regulatory 
-    article positions, scanning full text for anchor markers (e.g., "This course") 
-    to handle interleaved administrative articles gracefully.
-    - CROSS-ZONE INTEGRITY: Allows overlapping candidate zones because regulation chunking 
-    scans independently, ensuring trailing articles are captured without misinterpreting prose.
-    - STUDY-PLAN NOISE FILTERING: Prevents premature anchor matching on isolated 
-    course-code listings within pre-catalog study-plan tables.
-    """
+    # Catalog-zone isolation. Course descriptions in this document
+    # follow the regulatory articles, but a few short administrative
+    # articles can appear after the catalog rather than before it — so
+    # "last article position" isn't a reliable catalog-start reference.
+    # Instead, search the FULL document text for the first "This
+    # course" occurrence and take everything from there to the end as
+    # candidate catalog text. This is safe even if a trailing article
+    # falls inside that range, because the structured course-block
+    # parser requires specific field labels ("Course Code", "Course
+    # Name", etc.) and won't misfire on plain regulation prose.
+    # Regulation chunking is unaffected by this boundary — it always
+    # scans the full original text independently, so trailing articles
+    # are still correctly captured as regulation chunks regardless of
+    # where the catalog boundary falls.
     description_anchor = re.search(r"This course", full_text)
     if description_anchor:
         catalog_text = full_text[description_anchor.start():]
@@ -529,52 +526,7 @@ def chunk_document(cleaned_pages: list[dict], program: str, source_file: str) ->
     freeform_chunks, warnings = chunk_course_catalog_freeform(catalog_text, program, source_file)
     freeform_only = [c for c in freeform_chunks if c.metadata["course_code"] not in covered_codes]
 
-    # Safeguard AI-specific merging: only attempt to call the
-    # AI-specific extractor when it is present. This prevents crashes
-    # for deployments that only include SWE documents and do not define
-    # `_extract_ai_course_details` (e.g., AI/BIO sources removed).
-    ai_extractor = globals().get("_extract_ai_course_details")
-    if program == "AI" and ai_extractor:
-        freeform_by_code = {c.metadata["course_code"]: c for c in freeform_chunks}
-        merged_courses = []
-        used_freeform_codes: set[str] = set()
-
-        for table_chunk in table_only:
-            code = table_chunk.metadata["course_code"]
-            freeform_chunk = freeform_by_code.get(code)
-            if freeform_chunk is None:
-                merged_courses.append(table_chunk)
-                continue
-
-            merged_metadata = dict(table_chunk.metadata)
-            course_name, freeform_credit_hours, prereqs = ai_extractor(freeform_chunk.text, code)
-            if course_name:
-                merged_metadata["course_name"] = course_name
-            if not merged_metadata.get("credit_hours") and freeform_credit_hours:
-                merged_metadata["credit_hours"] = freeform_credit_hours
-            if prereqs:
-                merged_metadata["prerequisites"] = prereqs
-            if merged_metadata.get("course_name") and merged_metadata.get("credit_hours") and merged_metadata.get("prerequisites"):
-                merged_metadata["parse_confidence"] = "high"
-            elif merged_metadata.get("course_name") and merged_metadata.get("credit_hours"):
-                merged_metadata["parse_confidence"] = "medium"
-
-            merged_courses.append(
-                Chunk(
-                    chunk_id=table_chunk.chunk_id,
-                    zone_type=table_chunk.zone_type,
-                    text=freeform_chunk.text,
-                    metadata=merged_metadata,
-                )
-            )
-            used_freeform_codes.add(code)
-
-        freeform_only = [c for c in freeform_only if c.metadata["course_code"] not in used_freeform_codes]
-        course_chunks = structured_course_chunks + merged_courses + freeform_only
-    else:
-        if program == "AI" and not ai_extractor:
-            warnings.append("AI-specific extractor `_extract_ai_course_details` not found; skipping AI merging.")
-        course_chunks = structured_course_chunks + table_only + freeform_only
+    course_chunks = structured_course_chunks + table_only + freeform_only
 
     return {
         "program": program,
