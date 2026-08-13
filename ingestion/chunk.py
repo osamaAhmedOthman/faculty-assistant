@@ -472,6 +472,31 @@ def chunk_course_catalog_freeform(catalog_text: str, program: str, source_file: 
 # Orchestration
 # ---------------------------------------------------------------------------
 
+def enrich_prerequisite_names(course_chunks: list[Chunk]) -> None:
+    """
+    Second-pass enrichment: attach a resolved course_name for each
+    prerequisite code, without touching the existing prerequisites
+    field. Mutates each chunk's metadata in place.
+
+    Runs after all course chunks exist, since resolving a code to a
+    name requires the full code -> name map, which no single-course
+    parser has access to while it's still parsing one block/row.
+    Codes with no match in this document's catalog (cross-department
+    prerequisites, for example) are left unresolved rather than
+    treated as an error.
+    """
+    name_by_code = {c.metadata["course_code"]: c.metadata["course_name"] for c in course_chunks}
+
+    for chunk in course_chunks:
+        prereqs = chunk.metadata.get("prerequisites")
+        if not prereqs or prereqs == "---":
+            chunk.metadata["prerequisite_names"] = []
+            continue
+
+        codes = [code.strip() for code in prereqs.split(",") if code.strip()]
+        chunk.metadata["prerequisite_names"] = [name_by_code.get(code, code) for code in codes]
+
+
 def chunk_document(cleaned_pages: list[dict], program: str, source_file: str) -> dict:
     """
     Run the full zone-aware chunking pipeline on one document's cleaned
@@ -527,6 +552,7 @@ def chunk_document(cleaned_pages: list[dict], program: str, source_file: str) ->
     freeform_only = [c for c in freeform_chunks if c.metadata["course_code"] not in covered_codes]
 
     course_chunks = structured_course_chunks + table_only + freeform_only
+    enrich_prerequisite_names(course_chunks)
 
     return {
         "program": program,
