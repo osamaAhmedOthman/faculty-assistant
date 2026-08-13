@@ -10,7 +10,7 @@ Design notes:
   in memory to prevent re-initialization overhead across queries.
 - EMBEDDING CONSISTENCY: Uses the same model defined in core/config.py to 
   ensure query embeddings match index vector embeddings.
-- SCOPED FILTERING: Accepts optional metadata filters (e.g., program="AI") 
+- SCOPED FILTERING: Accepts optional metadata filters (e.g., program="SWE") 
   without deciding query intent, leaving orchestration to pipeline.py.
 - CLEAN OUTPUTS: Returns sanitized dictionaries (text, score, metadata) 
   instead of raw Pinecone response objects.
@@ -47,7 +47,7 @@ class Retriever:
         """
         Embed the query and return the top_k most relevant chunks.
 
-        program_filter: restrict to one program's chunks, e.g. "AI".
+        program_filter: restrict to one program's chunks, e.g. "SWE".
         zone_filter: restrict to one zone type, e.g. "course" or
         "regulation" — useful for query types where you already know
         the answer lives in one zone (a GPA-calculation question
