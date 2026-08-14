@@ -6,13 +6,14 @@ and generate a grounded answer via the LLM, staying strictly within
 what the retrieved context actually supports.
 
 Design notes:
-- STRICT GROUNDING: the system prompt instructs the model to answer
-  only from the provided context, and to say so explicitly when the
-  context doesn't cover the question, rather than falling back on
-  general knowledge. This is a deliberate scope decision, not just
-  phrasing — the assistant is a SWE-regulations lookup tool, not a
-  general CS chatbot, so it declines out-of-scope questions the same
-  way it declines under-evidenced ones.
+- STRICT GROUNDING: the system prompt (assembled by rag/prompts.py
+  from prompts/*.txt) instructs the model to answer only from the
+  provided context, and to say so explicitly when the context doesn't
+  cover the question, rather than falling back on general knowledge.
+  This is a deliberate scope decision, not just phrasing — the
+  assistant is a SWE-regulations lookup tool, not a general CS
+  chatbot, so it declines out-of-scope questions the same way it
+  declines under-evidenced ones.
 - RELEVANCE GATE: a fixed similarity-score cutoff decides whether
   retrieval found anything usable, rather than asking the LLM to
   judge relevance itself. This is cheap, deterministic, and gives the
@@ -38,6 +39,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.config import GROQ_MODEL, RETRIEVAL_TOP_K, require_keys
 from clients.groq_client import GroqClient
 from rag.retriever import Retriever
+from rag.prompts import build_system_prompt
 
 # Cosine similarity floor below which a retrieved chunk is treated as
 # not actually relevant. Chosen from observed real query scores: SWE
@@ -47,17 +49,6 @@ from rag.retriever import Retriever
 MIN_RELEVANCE_SCORE = 0.3
 
 NO_MATCH_ANSWER = "I don't have information about that in the SWE program regulations."
-
-SYSTEM_PROMPT = """You are the Faculty Assistant for Mansoura University's Software Engineering (SWE) program. You answer questions using ONLY the CONTEXT provided below, which is drawn from the official SWE program regulations document.
-
-Rules:
-- Base your answer only on the given context. Do not use outside or general knowledge, even if you are confident of the answer.
-- If the context does not contain enough information to answer the question, say so explicitly instead of guessing or filling gaps.
-- Every factual claim must cite its source exactly as it appears in the context labels, e.g. "Article 9" or "SWE143".
-- If the question is not about the SWE program regulations (courses, prerequisites, credit hours, academic rules, etc.), politely explain that you can only answer questions about the SWE program, even if you know the answer from general knowledge.
-- Respond with a single JSON object only, with no text before or after it, matching exactly this schema:
-{"answer": "<answer text, with inline citations>", "sources": ["<course code or Article N>", ...], "confidence": "high" | "medium" | "low"}
-"""
 
 
 def format_context(results: list[dict]) -> str:
@@ -123,7 +114,10 @@ class Generator:
         context = format_context(relevant)
         user_message = f"CONTEXT:\n{context}\n\nQUESTION: {query}"
 
-        raw_response = self.groq_client.chat(system=SYSTEM_PROMPT, user=user_message)
+        zone_types = {r["metadata"].get("zone_type") for r in relevant}
+        system_prompt = build_system_prompt(zone_types)
+
+        raw_response = self.groq_client.chat(system=system_prompt, user=user_message)
         parsed = self._parse_response(raw_response)
         parsed["retrieved_chunks"] = relevant
         return parsed
@@ -173,4 +167,8 @@ if __name__ == "__main__":
     print(f"Confidence: {result['confidence']}")
     if result.get("parse_error"):
         print("\nWARNING: model response was not valid JSON — showing raw text above.")
-    print(f"\nRetrieved {len(result['retrieved_chunks'])} chunk(s) above the relevance threshold.")
+    if result["sources"] or result["answer"] != NO_MATCH_ANSWER:
+        print(f"\nRetrieved {len(result['retrieved_chunks'])} chunk(s) above the relevance threshold ({MIN_RELEVANCE_SCORE}).")
+    else:
+        print(f"\nNo chunks reached the relevance threshold ({MIN_RELEVANCE_SCORE}) — "
+              f"showing all {len(result['retrieved_chunks'])} raw retrieved chunk(s) for reference.")
