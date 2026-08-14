@@ -12,9 +12,22 @@ streamlit>=1.32.0
 groq>=0.4.2
 pinecone>=6.0.0
 sentence-transformers>=2.5.1
-langchain>=0.1.12
-langchain-community>=0.0.28
-langchain-groq>=0.0.1
+
+# NOTE: langchain-core is pinned <0.4 and langchain-community is pinned
+# to an exact version. ragas (all versions through at least 0.3.9) does
+# an unconditional `from langchain_community.chat_models.vertexai import
+# ChatVertexAI` at import time. That submodule was removed from
+# langchain-community starting in its 0.4.x line (Vertex AI integration
+# is being sunset out of the community package). Letting either of
+# these float to latest breaks `import ragas` with:
+#   ModuleNotFoundError: No module named 'langchain_community.chat_models.vertexai'
+# even though this project never uses Vertex AI. Verified working combo below —
+# do not bump langchain-core or langchain-community without re-testing
+# `from ragas import evaluate` in isolation first.
+langchain-core<0.4
+langchain-community==0.3.27
+langchain-groq==0.2.5
+langchain-huggingface==0.1.2
 
 # Document Extraction, OCR & Image Processing
 pypdf>=4.1.0
@@ -24,7 +37,9 @@ pdf2image>=1.17.0
 Pillow>=10.2.0
 
 # Evaluation & Observability
-ragas>=0.1.5
+# Also pinned exact for the same reason as the langchain block above —
+# ragas>=0.4 was not tested against this project's langchain pins.
+ragas==0.2.15
 datasets>=2.18.0
 langsmith>=0.1.23
 
