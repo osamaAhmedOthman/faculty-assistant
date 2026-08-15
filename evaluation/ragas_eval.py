@@ -61,16 +61,21 @@ RESULTS_DIR = PROJECT_ROOT / "evaluation" / "results"
 
 RAGAS_METRIC_NAMES = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
 
-# Groq enforces token-per-day (TPD) quotas PER MODEL, not account-wide.
-# Reusing GROQ_MODEL (the generation model, llama-3.3-70b-versatile) as
-# RAGAS's judge LLM means evaluation scoring and answer generation drain
-# the same daily budget — exactly what exhausted it here. Routing the
-# judge to a separate, smaller model gives evaluation its own quota
-# bucket, independent of how much generation traffic the day has already
-# seen. Override via env var if you want a different judge model without
-# touching this file.
+# Groq enforces token-per-day (TPD) AND token-per-minute (TPM) quotas
+# PER MODEL, not account-wide. RAGAS's judge calls (faithfulness
+# especially, which decomposes an answer into individual claims and
+# checks each one) can be token-heavy enough that even a single
+# example's 4 metrics approaches a tight TPM ceiling — observed in
+# practice hitting llama-3.1-8b-instant's 6000 TPM limit. Routing the
+# judge to a separate model ALSO gives it a separate, roomier TPM
+# budget independent of whatever the generation model's traffic looks
+# like. openai/gpt-oss-20b (8000 TPM / 200K TPD) is the default here —
+# meaningfully more TPM headroom than llama-3.1-8b-instant's 6000,
+# still well clear of generation's llama-3.3-70b-versatile quota.
+# Override via env var if Groq's published limits change or you want
+# to compare judge models.
 import os
-RAGAS_JUDGE_MODEL = os.getenv("RAGAS_JUDGE_MODEL", "llama-3.1-8b-instant")
+RAGAS_JUDGE_MODEL = os.getenv("RAGAS_JUDGE_MODEL", "openai/gpt-oss-20b")
 
 
 # ---------------------------------------------------------------------------
@@ -187,10 +192,10 @@ def score_with_ragas(rows: list[dict]):
     judge_llm, judge_embeddings = _get_ragas_judge()
 
     run_config = RunConfig(
-        timeout=120,      # generous per-call ceiling; Groq is usually fast once it responds at all
-        max_retries=3,    # fail a job after 3 tries instead of silently retrying it 10x into the same rate limit
-        max_wait=30,      # cap backoff between retries so a slow job doesn't stall the whole run
-        max_workers=2,    # the actual fix — see docstring
+        timeout=180,       # generous ceiling — a job waiting out a TPM cooldown genuinely needs more time, not less
+        max_retries=5,     # more attempts than before: a TPM limit (resets every 60s) needs enough retries for backoff to actually reach past that window, unlike a TPD limit which retries can't fix at all
+        max_wait=90,       # must comfortably exceed Groq's own reported cooldown ("try again in 22.29s" observed in practice) or retries give up before the window that would have let them succeed
+        max_workers=1,     # fully serialized — at max_workers=2, two ~2500-token jobs landing in the same second can blow a 6000 TPM ceiling together even though neither alone would; one at a time paces total token usage against the per-minute window instead of bursting past it
     )
 
     result = evaluate(
