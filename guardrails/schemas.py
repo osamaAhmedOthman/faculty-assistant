@@ -65,3 +65,26 @@ class GuardrailReport(BaseModel):
     parse_error: bool = False
     citation_warnings: list[str] = Field(default_factory=list)
     citations_valid: bool = True
+
+
+class InputValidationResult(BaseModel):
+    """
+    Output of the INPUT-side guardrail (validators.validate_input),
+    run before retrieval/generation ever happen. Deliberately a
+    separate model from GuardrailReport, which validates the OUTPUT
+    side — input validation runs before there's any answer, sources,
+    or retrieved_chunks to speak of, so reusing GuardrailReport's shape
+    here would mean either fabricating those fields or making them
+    optional everywhere, weakening the schema for every other caller.
+
+    FAIL CLOSED, NOT OPEN — the opposite policy from the citation
+    guardrail: `blocked=True` means the query never reaches retrieval
+    or the LLM at all. This asymmetry is deliberate (see
+    validators.py's module docstring for the full reasoning) — a
+    false-positive block costs the user one rephrase; a missed prompt
+    injection could get the model to ignore system.txt entirely.
+    """
+
+    query: str
+    blocked: bool = False
+    reason: str | None = None
