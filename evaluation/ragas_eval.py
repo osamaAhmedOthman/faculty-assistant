@@ -61,19 +61,12 @@ RESULTS_DIR = PROJECT_ROOT / "evaluation" / "results"
 
 RAGAS_METRIC_NAMES = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
 
-# Groq enforces token-per-day (TPD) AND token-per-minute (TPM) quotas
-# PER MODEL, not account-wide. RAGAS's judge calls (faithfulness
-# especially, which decomposes an answer into individual claims and
-# checks each one) can be token-heavy enough that even a single
-# example's 4 metrics approaches a tight TPM ceiling — observed in
-# practice hitting llama-3.1-8b-instant's 6000 TPM limit. Routing the
-# judge to a separate model ALSO gives it a separate, roomier TPM
-# budget independent of whatever the generation model's traffic looks
-# like. openai/gpt-oss-20b (8000 TPM / 200K TPD) is the default here —
-# meaningfully more TPM headroom than llama-3.1-8b-instant's 6000,
-# still well clear of generation's llama-3.3-70b-versatile quota.
-# Override via env var if Groq's published limits change or you want
-# to compare judge models.
+# Groq enforces token-per-day (TPD) and token-per-minute (TPM) quotas
+# per model, not account-wide. RAGAS judge calls can still be heavy,
+# so keep the default aligned with the model the project is actively
+# using: openai/gpt-oss-120b. The env var remains available for
+# comparisons or temporary overrides, but the default should match the
+# generation setup we are actually running.
 import os
 RAGAS_JUDGE_MODEL = os.getenv("RAGAS_JUDGE_MODEL", "openai/gpt-oss-20b")
 
