@@ -1,23 +1,15 @@
 """
-pinecone_client.py — Pinecone wrapper
+Pinecone vector database client wrapper.
 
-Responsibility: talk to Pinecone. Nothing else — no knowledge of what
-a "chunk" is conceptually, no embedding logic. ingestion/upload.py
-decides WHAT to upload and prepares the payload shape; this module
-only knows HOW to get vectors into (and later, out of) Pinecone.
-
-Design notes:
-- Index creation is idempotent (create_index_if_not_exists): safe to
-  call every time upload.py runs, without accidentally erroring on a
-  second run or silently doing nothing on the first. This matters
-  because you'll re-run ingestion repeatedly while iterating.
-- Upserts are batched (default 100 vectors/call) rather than sent one
-  at a time — Pinecone's own docs recommend batching for throughput,
-  and sending 208 individual requests would be needlessly slow.
-- We fail loudly on a batch error rather than silently continuing to
-  the next batch, since a partial upload (some chunks present, some
-  missing, with no record of which) would be a much worse debugging
-  problem later than the pipeline just stopping now.
+Architecture & Design Notes:
+- Abstraction Seam: Isolates vector database I/O, keeping it agnostic of domain-specific chunking, 
+  metadata schemas, or embedding mechanics.
+- Idempotent Provisioning: Ensures index initialization checks safely run repeatedly without erroring 
+  or corrupting existing states during ingestion workflows.
+- Batched Ingestion: Vectorizes and upserts payloads in batches (default: 100) to maximize network 
+  throughput and align with client best practices.
+- Fail-Fast Batch Integrity: Aborts execution immediately on batch upload failures to prevent silent partial 
+  ingestion and subtle retrieval degradation.
 """
 
 from pinecone import Pinecone, ServerlessSpec

@@ -1,47 +1,15 @@
 """
-evaluation/run_eval.py — RAGAS evaluation runner
+RAGAS evaluation runner for benchmarking end-to-end pipeline performance.
 
-Responsibility: run every example in evaluation/dataset.py's GOLDEN_SET
-through the REAL Pipeline (retrieval + generation + guardrails, exactly
-as a user would hit it), then score the results with RAGAS. Nothing
-about retrieval, generation, or guardrail logic lives here — this file
-only orchestrates "run it for real, then measure it."
-
-Design notes:
-- SCORES THE REAL PIPELINE, NOT A MOCK: results are collected by
-  calling Pipeline.run() directly (same entry point api/ and
-  dashboard/ use), not by re-implementing retrieval/generation here.
-  An eval harness that tests a reimplementation of the pipeline
-  instead of the pipeline itself would validate the wrong thing.
-- NO OPENAI DEPENDENCY: RAGAS's default judge LLM is OpenAI, which
-  this project has no key for and no other use of. The judge LLM is
-  wired to the same GroqClient/model this project already uses for
-  generation, and the judge embeddings to the same local
-  sentence-transformers model already used for retrieval — no new
-  external dependency or cost introduced just to run evaluation.
-- METRICS CHOSEN:
-    faithfulness       — does the answer only claim what's in the
-                          retrieved context? The statistical, per-answer
-                          cousin of what the citation guardrail checks
-                          structurally.
-    answer_relevancy    — does the answer actually address the question
-                          asked (not just grounded in *something*).
-    context_precision   — of what was retrieved, how much was actually
-                          relevant.
-    context_recall      — against ground_truth, did retrieval miss
-                          relevant content it should have found. Only
-                          meaningful on examples with a real
-                          ground_truth answer.
-- CATEGORY BREAKDOWN: a single averaged score across "answerable
-  course question" and "out-of-scope adversarial prompt" examples
-  would hide exactly the failure modes that matter most (e.g. scoring
-  well on easy course lookups while failing every out-of-scope
-  refusal). Results are grouped by GoldenExample.category, matching
-  dataset.py's stated reason for having that field at all.
-- RESULTS ARE SAVED, NOT JUST PRINTED: every run writes a timestamped
-  JSON to evaluation/results/, so scores are comparable across runs
-  (e.g. before/after a guardrail change) instead of only living in a
-  terminal scrollback.
+Architecture & Design Notes:
+- End-to-End Evaluation: Executes `Pipeline.run()` directly on `GOLDEN_SET` examples, testing the actual 
+  retrieval, generation, and guardrail layers used by production entry points (`api/`, `dashboard/`).
+- Zero OpenAI Footprint: Replaces RAGAS default OpenAI dependencies with the existing local 
+  `sentence-transformers` model (for embeddings) and `GroqClient` (as the LLM judge).
+- Core Metrics Suite: Measures Faithfulness, Answer Relevancy, Context Precision, and Context Recall to 
+  comprehensively evaluate groundedness, alignment, and retrieval quality.
+- Categorized & Persistent Reporting: Groups scores by `category` to uncover hidden domain-specific failure 
+  modes and saves timestamped JSON outputs to `evaluation/results/` for historical comparison.
 """
 
 import sys

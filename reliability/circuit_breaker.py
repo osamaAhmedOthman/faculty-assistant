@@ -1,39 +1,15 @@
 """
-reliability/circuit_breaker.py — stop hammering a failing dependency
+Circuit breaker mechanism for dependency failure isolation.
 
-Responsibility: track consecutive failures of calls to ONE external
-dependency, and once a failure threshold is crossed, fail fast (no
-network call at all) for a cooldown window rather than continuing to
-hit an already-failing service. Nothing about retrying an individual
-call lives here — that's retry.py's job. This file only decides
-whether to attempt the call at all.
-
-Design notes:
-- ONE BREAKER PER DEPENDENCY, NOT PER CALL SITE: matches how clients/
-  already isolates each external dependency (GroqClient,
-  PineconeClient) behind its own module. "Groq is down" is a fact
-  about Groq, not about which function happened to call it — sharing
-  one breaker instance across every Groq call site means a failure
-  detected via one path (e.g. generation) correctly fails fast on
-  every other path too, instead of each call site discovering the
-  same outage independently and burning its own failure budget before
-  tripping.
-- THREE-STATE MACHINE (CLOSED / OPEN / HALF_OPEN), STANDARD PATTERN:
-    CLOSED     — normal operation; failures are counted.
-    OPEN       — failure_threshold was crossed; calls fail immediately
-                 via CircuitBreakerOpenError, without touching the
-                 dependency, until recovery_timeout has elapsed.
-    HALF_OPEN  — recovery_timeout has elapsed; the NEXT call is let
-                 through as a probe. Success closes the breaker and
-                 resets the failure count; failure reopens it
-                 immediately (not after threshold failures again —
-                 one failed probe is enough evidence the dependency is
-                 still down).
-- THREAD SAFETY: a lock guards state transitions. Not currently load-
-  bearing for this project's synchronous single-request pipeline, but
-  api/'s FastAPI server will handle concurrent requests, and a breaker
-  that isn't thread-safe would be a real bug there — cheaper to build
-  correctly now than to retrofit once api/ exists.
+Architecture & Design Notes:
+- Per-Dependency Instance: Tracks failure states at the dependency level (e.g., Groq, Pinecone) rather 
+  than per call site, ensuring outage discoveries immediately protect all execution paths.
+- Three-State Finite State Machine: Implements standard Closed (normal), Open (fail-fast cooldown), 
+  and Half-Open (probe recovery) states to manage outage lifecycles deterministically.
+- Strict Probe Policy: Re-opens immediately upon a single failed probe in the Half-Open state, 
+  preventing recurring retry loops during ongoing downstream outages.
+- Concurrency Safe: Uses thread locks around state transitions to safely handle concurrent HTTP requests 
+  within asynchronous/multi-threaded application entry points (`FastAPI`).
 """
 
 import threading

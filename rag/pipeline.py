@@ -1,34 +1,14 @@
 """
-pipeline.py — single orchestration entry point
+Orchestration pipeline for end-to-end query processing.
 
-Responsibility: the one place api/ and dashboard/ call into. Wires
-retriever -> generator (which internally builds prompts and calls
-Groq) -> guardrails -> retry/fallback, and returns one structured
-response shape. No retrieval, prompt, or LLM logic lives here — this
-file only sequences calls to the modules that already own that logic.
-
-Design notes:
-- SINGLE ENTRY POINT: api/routes.py and dashboard/app.py should both
-  call Pipeline.run(), never Retriever or Generator directly. This
-  keeps guardrail/retry behavior consistent across every caller
-  instead of each caller having to remember to apply it.
-- RELIABILITY WIRING: self.generator.answer() is wrapped with
-  reliability/retry.py's exponential-backoff retry AND
-  reliability/circuit_breaker.py's failure-tracking breaker — retry
-  handles a single transient blip (one rate-limited call that
-  succeeds on the second try), while the breaker handles a sustained
-  outage (Groq down for minutes) by failing fast instead of letting
-  every request pay the full retry delay against an already-broken
-  dependency. Both are real, load-bearing behavior now, not
-  placeholders — see _call_generator_with_reliability.
-- GUARDRAILS: citation verification (guardrails/validators.py) runs on
-  every result via _validate_output. Input-side guardrails
-  (emptiness/length checks, known prompt-injection patterns) run via
-  _validate_input before retrieval ever happens — see validate_input's
-  docstring for why this guardrail fails CLOSED (blocks outright)
-  while the citation guardrail fails OPEN (flags and continues).
+Architecture & Design Notes:
+- Unified Facade: Serves as the single orchestration entry point (`Pipeline.run()`) for HTTP endpoints (`api/`) 
+  and UI dashboards (`dashboard/`), ensuring identical retrieval, generation, guardrail, and retry logic across all callers.
+- Multi-Layered Reliability: Wraps LLM calls with exponential backoff retries for transient failures and a circuit 
+  breaker for sustained provider outages, preventing repeated timeout delays during downtime.
+- Dual-Phase Guardrails: Runs pre-retrieval input validation (fail-closed) to block empty queries and prompt injections early, 
+  and post-generation output validation (fail-open) to flag hallucinated or ungrounded citations.
 """
-
 import sys
 from pathlib import Path
 

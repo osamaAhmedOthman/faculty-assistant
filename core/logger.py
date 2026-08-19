@@ -1,39 +1,16 @@
 """
-core/logger.py — centralized logging configuration
+Centralized logging configuration module.
 
-Responsibility: configure Python's logging ONCE, with one consistent
-format/level, so every other module (fallback.py, validators.py,
-retry.py, and eventually api/ and dashboard/) can just call
-`logging.getLogger(__name__)` and get correctly-formatted output
-without each file reinventing basicConfig() or — worse — some files
-configuring it and others silently relying on the unconfigured root
-logger's default (which prints WARNING+ only, with no timestamp or
-module name, to stderr).
-
-Design notes:
-- CALLED ONCE, AT PROCESS ENTRY: configure_logging() should be called
-  exactly once, from each process's actual entry point (api/main.py,
-  dashboard/app.py, or a script's own __main__ block) — NOT imported
-  and called from inside library modules like fallback.py or
-  validators.py. Those files already do the right thing:
-  `logger = logging.getLogger(__name__)` at import time, with no
-  handler/level configuration of their own. That's the standard
-  library-vs-application split: library code gets a logger and emits
-  through it; only the application's entry point decides how those
-  records are actually formatted and where they go.
-- IDEMPOTENT: safe to call more than once (e.g. once from pipeline.py's
-  own __main__ smoke test AND once from api/main.py during the same
-  test session) without duplicating handlers and therefore duplicating
-  every log line. Guards on whether the root logger already has
-  handlers attached.
-- LEVEL VIA ENV VAR: LOG_LEVEL follows the same "config lives in env
-  vars with a sane default" convention as core/config.py — no need to
-  edit code to turn on DEBUG logging locally vs. INFO in a deployed
-  container.
-- FORMAT INCLUDES MODULE NAME: `%(name)s` is the logger name passed to
-  getLogger(__name__), so a log line is traceable to the exact module
-  that emitted it (e.g. "reliability.circuit_breaker") without needing
-  to grep for a message string.
+Architecture & Design Notes:
+- Standard Library-vs-Application Split: Entry points (`api/main.py`, `app.py`) invoke 
+  `configure_logging()`, while internal library modules call `logging.getLogger(__name__)` 
+  to emit formatted logs cleanly without configuring handlers.
+- Idempotent Design: Guards against duplicate handler attachment, allowing safe invocation across 
+  multiple test sessions or process entry points without duplicating log output.
+- Configurable Runtime Levels: Reads `LOG_LEVEL` from environment variables, defaulting to `INFO` 
+  with easy toggling for local debugging.
+- Traceable Formatting: Includes `%(name)s` in log formats to pinpoint the originating module 
+  (e.g., `reliability.circuit_breaker`) for easy log filtering.
 """
 
 import logging

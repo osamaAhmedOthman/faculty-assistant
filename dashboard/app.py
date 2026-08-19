@@ -1,51 +1,17 @@
 """
-dashboard/app.py — Streamlit dashboard
+Streamlit dashboard providing a lightweight UI over the FastAPI service.
 
-Responsibility: a thin UI over the FastAPI service. Calls the API over
-HTTP via `requests` — deliberately NOT `from rag.pipeline import
-Pipeline` — matching the two-services architecture decision: dashboard
-and API are independent processes/containers, so this file has no
-business importing rag/, guardrails/, or reliability/ at all. If it
-did, this container would need every pipeline dependency installed
-(sentence-transformers, torch, pinecone, groq) just to render a chat
-box, and would carry its own separate Pipeline instance with its own
-separate circuit-breaker state — the exact duplication running two
-independent in-process pipelines would create.
-
-Design notes:
-- API_BASE_URL VIA ENV VAR: defaults to the FastAPI service's
-  docker-compose service name (see docker-compose.yml — service
-  hostnames are resolvable between containers on the same Docker
-  network) so this works out of the box under `docker-compose up`,
-  but stays overridable for local dev (e.g. running the dashboard
-  bare with `streamlit run` against a locally-running `uvicorn`).
-- NO top_k / zone_filter CONTROLS: both were originally exposed as
-  sidebar widgets, but neither is a decision a student asking a
-  regulations question should have to make — "restrict search to
-  Course/Regulation/Table" requires already knowing which zone the
-  answer lives in, which is exactly what the student is asking the
-  assistant to figure out. DEFAULT_TOP_K and zone_filter=None (search
-  everything) are fixed constants instead. If a future version wants
-  to auto-select a zone_filter based on the question's shape, that
-  belongs in Pipeline/Generator as a real classification step, not as
-  a manual dropdown pushed onto the user.
-- st.session_state FOR HISTORY: Streamlit reruns this whole script top
-  to bottom on every interaction, so anything that needs to persist
-  across reruns (chat history) must live in st.session_state, not a
-  plain module-level list.
-- NO RETRY/CIRCUIT-BREAKER LOGIC HERE: that reliability layer already
-  lives inside Pipeline.run() on the API side (see reliability/) — a
-  degraded-but-valid low-confidence fallback answer comes back as an
-  ordinary 200 response, so this file only needs to handle genuine
-  HTTP/network failures (the API process itself being unreachable),
-  not "the LLM is down" (which the API already turned into a normal
-  response for exactly this reason).
-- CITATION WARNINGS SURFACED, NOT HIDDEN: citations_valid=False is a
-  real signal from the guardrail layer (guardrails/validators.py) that
-  a source may be hallucinated — the fail-open design deliberately
-  keeps the answer visible rather than blocking it, so the dashboard's
-  job is to show BOTH: the answer, and a visible warning the guardrail
-  raised about it.
+Architecture & Design Notes:
+- Process Isolation: Communicates with the API purely over HTTP (`requests`). Avoids importing
+  internal pipeline modules (`rag/`, `guardrails/`), keeping dependencies lean and avoiding state duplication.
+- Config & Networking: `API_BASE_URL` reads from environment variables (defaults to `http://api:8000` 
+  for Docker network DNS, overridable for local dev).
+- Fixed Retrieval Parameters: Hides `top_k` and `zone_filter` from the UI to avoid forcing 
+  manual domain decisions onto end users.
+- State & Error Handling: Uses `st.session_state` to retain chat history across Streamlit reruns. 
+  Relies on API-side reliability layers for LLM fallback handling, catching only raw network failures.
+- Guardrail Transparency: Displays citation verification warnings directly alongside 
+  responses when `citations_valid=False`.
 """
 
 import os

@@ -1,0 +1,56 @@
+# Orchestrates API and Dashboard containers using a single shared Dockerfile.
+#
+# Architecture & Networking:
+# - Both services build from the root Dockerfile, distinguished by their runtime `command`.
+# - Inter-container communication uses Docker DNS: Dashboard reaches API via "http://api:8000".
+#
+# Key Features:
+# - Health-Gated Startup: `depends_on` with `service_healthy` ensures API is ready before UI launches.
+# - Environment Security: Automatically loads keys (`GROQ_API_KEY`, `PINECONE_API_KEY`) from root `.env`.
+# - Build Strategy: Production image setup without source mounts—use `docker-compose up --build` on updates.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-faculty-assistant}
+      - PINECONE_CLOUD=${PINECONE_CLOUD:-aws}
+      - PINECONE_REGION=${PINECONE_REGION:-us-east-1}
+      - GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-120b}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-paraphrase-multilingual-MiniLM-L12-v2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - API_ALLOWED_ORIGINS=http://localhost:8501
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    networks:
+      - faculty-assistant-net
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["streamlit", "run", "dashboard/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - faculty-assistant-net
+
+networks:
+  faculty-assistant-net:
+    driver: bridge

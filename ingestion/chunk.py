@@ -204,27 +204,17 @@ def chunk_course_catalog_structured(catalog_text: str, program: str, source_file
     return chunks
 
 
-# ---------------------------------------------------------------------------
-# Table-aware course parser
-# ---------------------------------------------------------------------------
-#
-# WHY THIS EXISTS: verified against real extraction output that
-# preprocess.py was silently discarding table structure that extract.py
-# had already captured correctly (67 real tables in the SWE doc, 105 in
-# BIO, 58/67 and 48/105 of which respectively contain at least one
-# genuine course-code-shaped cell — confirmed by direct inspection, not
-# assumed). That data is now preserved (see preprocess.py's CleanedPage.
-# tables field). This parser reads it directly, which is strictly more
-# reliable than inferring course boundaries from freeform prose, because
-# a table row is an explicit, unambiguous record — no boundary-bleed
-# risk the way freeform text-window parsing has.
-#
-# WHAT IT DOES NOT DO: invent fields a table doesn't actually provide.
-# A row might give code+name but no credit-hour column, or vice versa.
-# Missing fields are left as None rather than guessed, and confidence
-# is set explicitly per what was actually recoverable — per requirement,
-# this parser never fabricates data to make a chunk look more complete
-# than the source table actually was.
+"""
+Table-aware course extraction parser.
+
+Architecture & Design Notes:
+- Structural Preservation: Directly processes structured page tables (`CleanedPage.tables`) 
+  to prevent discarding critical tabular course data captured during extraction.
+- Deterministic Parsing: Treats individual table rows as explicit, unambiguous records, avoiding 
+  the text-boundary bleed and chunk-truncation risks inherent in freeform prose windowing.
+- Honest Completeness & Confidence: Leaves unprovided or ambiguous row fields as `None` rather than 
+  guessing defaults, setting explicit confidence scores based strictly on recoverable data.
+"""
 
 _TABLE_COURSE_CODE_PATTERN = re.compile(r"^[A-Z]{2,5}\d{2,4}$")
 _TABLE_CREDIT_HOURS_PATTERN = re.compile(r"^\d{1,2}$")  # bare 1-2 digit cell, e.g. "3"

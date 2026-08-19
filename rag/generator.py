@@ -1,31 +1,15 @@
 """
-generator.py — answer generation
+Grounded LLM response generator.
 
-Responsibility: given a user question, retrieve relevant SWE chunks
-and generate a grounded answer via the LLM, staying strictly within
-what the retrieved context actually supports.
-
-Design notes:
-- STRICT GROUNDING: the system prompt (assembled by rag/prompts.py
-  from prompts/*.txt) instructs the model to answer only from the
-  provided context, and to say so explicitly when the context doesn't
-  cover the question, rather than falling back on general knowledge.
-  This is a deliberate scope decision, not just phrasing — the
-  assistant is a SWE-regulations lookup tool, not a general CS
-  chatbot, so it declines out-of-scope questions the same way it
-  declines under-evidenced ones.
-- RELEVANCE GATE: a fixed similarity-score cutoff decides whether
-  retrieval found anything usable, rather than asking the LLM to
-  judge relevance itself. This is cheap, deterministic, and gives the
-  evaluation harness a fixed number to test against, instead of a
-  judgment call baked invisibly into a prompt.
-- STRUCTURED OUTPUT: the model returns JSON ({answer, sources,
-  confidence}) rather than freeform prose, so api/ and dashboard/
-  don't need to parse natural language, and citations are a checkable
-  field rather than text an eval script would have to regex out.
-- retrieved_chunks is always attached to the result (even on a
-  no-match response) so callers — especially evaluation code — can
-  inspect what retrieval actually found without a second query.
+Architecture & Design Notes:
+- Strict Grounding Policy: Enforces context-only generation via system prompts (`prompts/*.txt`), explicitly 
+  declining out-of-scope or under-evidenced queries to maintain a domain-specific lookup scope.
+- Deterministic Relevance Gate: Uses a fixed vector-similarity threshold to filter retrieved chunks before generation, 
+  avoiding non-deterministic LLM self-relevance checks.
+- Structured JSON Protocol: Enforces a JSON output schema (`{answer, sources, confidence}`), providing predictable 
+  fields for UI rendering, evaluation scripts, and guardrail validation.
+- Full Context Inspection: Attaches `retrieved_chunks` directly to every output (including no-match responses) 
+  to enable auditability and evaluation without re-querying.
 """
 
 import sys

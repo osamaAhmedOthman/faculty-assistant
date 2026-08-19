@@ -1,33 +1,15 @@
 """
-api/routes.py — HTTP routes
+HTTP route handlers for the FastAPI layer.
 
-Responsibility: translate an HTTP request into a Pipeline.run() call
-and reshape the result into QueryResponse. No retrieval, generation,
-or guardrail logic lives here — this file is a thin adapter between
-FastAPI and rag/pipeline.py, matching the project's existing
-one-concern-per-file convention (see pipeline.py's own docstring).
-
-Design notes:
-- ONE Pipeline INSTANCE, MODULE-SCOPED: instantiated once at import
-  time, not per-request. Pipeline.__init__ builds a Generator, which
-  builds a Retriever, which loads the sentence-transformers embedding
-  model and opens a Pinecone connection — doing that per-request would
-  be a multi-second cost on every single call, and would also reset
-  the shared circuit breaker's state (see pipeline.py's
-  _GROQ_CIRCUIT_BREAKER) between requests, defeating its purpose of
-  tracking failures ACROSS calls.
-- NO TRY/EXCEPT AROUND pipeline.run(): Pipeline.run() already has its
-  own internal fallback path for generation failures (retry exhaustion,
-  circuit breaker open — see pipeline.py's _call_generator_with_reliability)
-  and returns a normal, valid response shape even in that case. There
-  is no expected exception type left for this layer to catch; letting
-  something genuinely unexpected propagate to FastAPI's default 500
-  handler is more honest than swallowing it into a fake 200.
-- CHUNK RESHAPING LIVES HERE, NOT IN models.py: building a display
-  label from a chunk's metadata (course_code vs. "Article N") is
-  presentation logic specific to this HTTP layer, not a schema
-  concern — models.py only defines the shape, this file decides how
-  to populate it.
+Architecture & Design Notes:
+- Adapter Pattern: Serves as a thin translation layer between HTTP requests and `Pipeline.run()`, 
+  keeping retrieval, generation, and guardrail logic fully decoupled.
+- Singleton Pipeline: Instantiates `Pipeline` once at module load to reuse embedding models, maintain 
+  Pinecone connections, and preserve global circuit-breaker state across requests.
+- Fail-Honest Error Handling: Omits redundant `try/except` blocks around `pipeline.run()`, allowing internal 
+  reliability fallbacks to handle expected errors while letting unexpected bugs bubble up to standard 500 responses.
+- Presentation Logic: Formats raw metadata into display labels (e.g., resolving `course_code` vs. `"Article N"`) 
+  directly within the route adapter before populating response models.
 """
 
 from fastapi import APIRouter

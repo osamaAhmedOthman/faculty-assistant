@@ -1,35 +1,13 @@
 """
-reliability/fallback.py — degraded-but-valid response construction
+Degraded-but-valid response construction module.
 
-Responsibility: build the result dict Pipeline.run() returns when
-generation fails even after retry.py's retries are exhausted and
-circuit_breaker.py's breaker won't allow another attempt. Nothing
-about WHEN to fall back lives here — that decision is pipeline.py's
-(see _call_generator_with_reliability). This file only answers "what
-does a valid-but-degraded response look like."
-
-Design notes:
-- SEPARATE FILE, NOT INLINE IN PIPELINE.PY: matches this project's own
-  established convention — retry.py owns retry, circuit_breaker.py
-  owns breaker tracking, each a single reliability concern in its own
-  file. Burying fallback construction inside pipeline.py as a private
-  method broke that pattern and made the fallback path easy to forget
-  to test (which is exactly what happened — see
-  tests/test_reliability.py's fallback tests and test_pipeline.py's
-  total-failure test, neither of which existed before this file did).
-- MATCHES GeneratorResult'S SHAPE ON PURPOSE: confidence="low" and
-  empty sources/retrieved_chunks mean guardrails/validators.py's
-  citation guardrail runs on a fallback result exactly like it would
-  on a real one — no sources to check against no retrieved chunks is
-  a match, not a mismatch (see verify_citations' NO_MATCH_ANSWER
-  handling) — so pipeline.py never needs a special case in
-  _validate_output for "this was a fallback, skip the guardrail."
-- REASON IS LOGGED, NEVER SHOWN TO THE USER: `reason` carries internal
-  detail (an exception repr, a breaker-state message) that's useful
-  for debugging and worth logging, but FALLBACK_ANSWER — not `reason`
-  — is what actually goes in the returned `answer` field. An internal
-  exception message or breaker-state string isn't something api/ or
-  dashboard/ should ever render as-is to an end user.
+Architecture & Design Notes:
+- Single-Concern Isolation: Decouples fallback payload construction from orchestration (`pipeline.py`), 
+  ensuring isolated testability for degraded execution paths.
+- Interface Parity: Mirrors the standard `GeneratorResult` schema (`confidence="low"`, empty sources) to allow 
+  downstream guardrail checks (`verify_citations`) to process fallback outputs without special-case logic.
+- Secure Degradation: Logs specific failure causes (`reason`) internally for debugging while returning a clean, 
+  user-safe default message (`FALLBACK_ANSWER`) to prevent leaking internal stack traces or breaker states.
 """
 
 import logging

@@ -1,24 +1,14 @@
 """
-embeddings.py — embedding client wrapper
+Embedding client wrapper for vector generation.
 
-Responsibility: turn text into vectors. Nothing else — no chunking
-logic, no knowledge of Pinecone's upsert format. This isolation
-matters because it's the seam you'd swap at if you ever moved from a
-local model to an API-based embedding provider (OpenAI, Cohere): only
-this file changes, nothing upstream (embed.py) or downstream
-(retriever.py) needs to know which backend is behind it.
-
-Design notes:
-- Wrapped as a class (not bare functions) so it loads the model ONCE
-  and reuses it across many embed() calls — SentenceTransformer model
-  loading takes a few seconds; doing it per-call would make embedding
-  a whole corpus painfully slow.
-- Batches texts internally rather than embedding one at a time, since
-  batched inference is meaningfully faster on both CPU and GPU.
-- Returns plain Python lists (not numpy arrays) from the public API,
-  since that's what gets JSON-serialized into chunks.json and what
-  Pinecone's client expects — keeping numpy types from leaking out of
-  this module avoids downstream code needing to know or care about it.
+Architecture & Design Notes:
+- Provider Abstraction: Decouples vector generation from vector storage and chunking, establishing 
+  a clean seam for swapping local models with external embedding APIs without affecting callers.
+- Persistent Model Instance: Loads the underlying model once upon class instantiation to avoid repeated, 
+  costly model initialization across calls.
+- Batched Vectorization: Vectorizes text in batches to optimize CPU/GPU inference throughput.
+- Serialized Primitive Outputs: Converts raw NumPy outputs into plain Python list structures to simplify 
+  JSON serialization and ensure compatibility with vector database clients.
 """
 
 from core.config import EMBEDDING_MODEL_NAME, EMBEDDING_BATCH_SIZE

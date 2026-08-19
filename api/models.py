@@ -1,33 +1,13 @@
 """
-api/models.py — request/response schemas for the FastAPI layer
+Request/Response schemas for the FastAPI layer (Pydantic contract).
 
-Responsibility: define the HTTP-facing contract only. No pipeline
-logic, no guardrail logic — those stay in rag/pipeline.py and
-guardrails/. This file's only job is the shape of what crosses the
-wire, so routes.py and dashboard/app.py (and FastAPI's own
-auto-generated OpenAPI docs) all agree on it.
-
-Design notes:
-- MIRRORS GuardrailReport, DOESN'T IMPORT IT: QueryResponse's fields
-  are deliberately kept in lockstep with guardrails/schemas.py's
-  GuardrailReport (same field names, same types) rather than importing
-  and reusing that model directly. Reusing it would couple the HTTP
-  contract to an internal pipeline type — a future internal refactor
-  of GuardrailReport (e.g. adding a field only pipeline.py cares about)
-  would then silently change the public API response shape too. Two
-  separate models, kept in sync deliberately, means the HTTP contract
-  only changes when someone decides it should.
-- RetrievedChunkResponse OMITS raw metadata: the internal
-  RetrievedChunk.metadata dict is a grab-bag (course_code, article_num,
-  page_number, prerequisite_names, ...) meant for internal guardrail
-  matching, not a stable public field. Exposing the handful of fields
-  a dashboard/API consumer actually wants (zone_type, a resolved
-  label) is a clearer contract than passing the whole internal dict
-  through unfiltered.
-- top_k / zone_filter ARE OPTIONAL ON THE REQUEST: mirrors
-  Pipeline.run()'s own optional args with the same defaults, so a
-  client that sends neither gets identical behavior to calling
-  Pipeline.run(query) directly.
+Architecture & Design Notes:
+- Contract Isolation: Defines public-facing HTTP data shapes without importing internal pipeline types 
+  (e.g., mirrors `GuardrailReport`), preventing internal refactors from accidentally breaking the public API.
+- Clean Payload Design: Filters out internal metadata dicts from `RetrievedChunkResponse`, exposing only 
+  essential consumer fields (`zone_type`, resolved labels) for a cleaner UI/API interface.
+- Flexible Querying: Configures `top_k` and `zone_filter` as optional parameters on requests, matching 
+  `Pipeline.run()` defaults for seamless client execution.
 """
 
 from typing import Literal

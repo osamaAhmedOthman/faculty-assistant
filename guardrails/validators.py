@@ -1,53 +1,14 @@
 """
-guardrails/validators.py — business-rule / semantic guardrails
+Business-rule and semantic input/output guardrails.
 
-Responsibility: catch cases where a Generator result is *structurally*
-fine (valid JSON, right types — schemas.py's job) but not
-*trustworthy*. The first and highest-value check here: the model
-citing a source that was never actually retrieved (hallucinated
-grounding) — the failure mode strict-grounding prompting in system.txt
-is meant to prevent, but prompting alone doesn't guarantee.
-
-Design notes:
-- FAIL OPEN, NOT CLOSED (OUTPUT SIDE): an invalid citation downgrades
-  confidence and attaches a warning rather than discarding the answer
-  outright. The rest of the answer may still be entirely correct — the
-  model may have cited one extra course code from pattern-matching
-  alongside otherwise-grounded claims. Blanking the whole answer on
-  one bad citation throws away real signal; silently stripping the bad
-  citation would hide the hallucination from both the eval harness and
-  the user. Flagging is the only option that does both: keeps what's
-  usable, surfaces what isn't.
-- FAIL CLOSED (INPUT SIDE) — THE OPPOSITE POLICY, DELIBERATELY:
-  validate_input (below) BLOCKS a query outright rather than flagging
-  and continuing. The asymmetry with verify_citations is intentional,
-  not an inconsistency: a false-positive block on the input side costs
-  the user one rephrase — cheap, recoverable, and entirely within the
-  user's control. A missed prompt injection on the input side could
-  get the model to ignore system.txt's grounding rules entirely,
-  producing output the OUTPUT-side guardrail wasn't designed to catch
-  (verify_citations only checks citation-vs-retrieval consistency; it
-  has no way to detect "the model was talked into ignoring its
-  instructions" if the resulting citations still happen to line up).
-  Given that gap, blocking early is the safer default.
-- LABEL NORMALIZATION: system.txt asks the model to cite course codes
-  and "Article N" exactly as shown in context labels, but LLMs aren't
-  perfectly literal about formatting — whitespace/case drift
-  ("article 9" vs "Article 9") is expected and shouldn't be reported
-  as a hallucination. Comparison is case-insensitive and
-  whitespace-normalized.
-- TABLE CHUNKS EXCLUDED FROM VALID LABELS: system.txt never asks the
-  model to cite a table directly (courses and articles only), so a
-  citation shaped like a table reference isn't a legitimate match
-  regardless of whether a table chunk was retrieved.
-- INPUT VALIDATION IS HEURISTIC, NOT A GUARANTEE: validate_input uses
-  pattern matching (known injection phrasings) and simple length/
-  emptiness checks — cheap, fast, no LLM call needed before retrieval
-  even happens. This is explicitly a best-effort defense-in-depth
-  layer, not a claim that every injection attempt will be caught. A
-  determined, novel-phrasing attack can still get through to
-  generation, where system.txt's own instructions are the next (and
-  currently only remaining) line of defense.
+Architecture & Design Notes:
+- Asymmetric Safety Policy: Fail-open on output validation (flags bad citations and downgrades 
+  confidence without discarding the answer); fail-closed on input validation (blocks suspected prompt injections early).
+- Citation Verification: Checks generated citations against retrieved context labels, applying case-insensitive 
+  and whitespace normalization to distinguish minor formatting drift from true hallucinations.
+- Exclusion Rules: Excludes table chunks from valid citation targets to align strictly with `system.txt` citation requirements.
+- Lightweight Input Filtering: Performs heuristic pattern-matching and bounds checks on incoming queries before 
+  retrieval, providing a zero-latency defense-in-depth layer against common prompt injections.
 """
 
 import logging

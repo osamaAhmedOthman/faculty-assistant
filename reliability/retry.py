@@ -1,41 +1,14 @@
 """
-reliability/retry.py — retry policy for transient external-dependency
-failures
+Retry policy wrapper for transient external-dependency failures.
 
-Responsibility: retry a call to an external dependency (Groq,
-Pinecone) with exponential backoff and jitter, ONLY for exceptions
-that are actually transient. Nothing about circuit-breaking or what
-happens after retries are exhausted lives here — that's
-circuit_breaker.py and pipeline.py's job respectively. This file only
-answers "should this specific failure be retried, and how long should
-we wait before trying again."
-
-Design notes:
-- BUILT ON TENACITY, NOT HAND-ROLLED: tenacity is already in this
-  project's requirements.txt. Writing a bespoke retry loop (a while
-  loop with time.sleep and a counter) would be reinventing something
-  tenacity already does correctly — including the harder-to-get-right
-  parts like jitter (avoiding synchronized retry storms across
-  multiple callers) and clean separation between "should retry" and
-  "how long to wait." Demonstrating correct use of an existing
-  reliability library is a stronger signal for this project's stated
-  goals than a from-scratch implementation would be.
-- NARROW RETRYABLE EXCEPTION SET, DELIBERATELY: only transient/
-  network/rate-limit-shaped exceptions are retried. A ValueError from
-  Retriever.retrieve() being called with an empty query, or a genuine
-  bug elsewhere, must fail immediately and loudly — retrying those
-  would silently mask a real problem behind a few seconds of delay
-  before it fails anyway, which is strictly worse for debugging than
-  an immediate failure.
-- GROQ EXCEPTION TYPES IMPORTED DEFENSIVELY: the retryable set
-  includes Groq's own exception types (RateLimitError,
-  APIConnectionError, APITimeoutError) when the groq package is
-  installed, so real API failures like the RateLimitError seen during
-  this project's own RAGAS runs are actually caught by this policy —
-  not just generic TimeoutError/ConnectionError, which wouldn't have
-  matched Groq's actual exception types.
+Architecture & Design Notes:
+- Production-Grade Library Integration: Leverages `tenacity` for exponential backoff and randomized jitter, 
+  preventing synchronized retry storms across concurrent callers while eliminating hand-rolled sleep loops.
+- Targeted Transient Exception Filtering: Restricts retries strictly to network, timeout, and rate-limit errors, 
+  failing fast on programmatic bugs (`ValueError`) to prevent masking errors behind artificial delays.
+- Defensive SDK Exception Wiring: Dynamically imports Groq-specific error types (`RateLimitError`, `APIConnectionError`, 
+  `APITimeoutError`) so real vendor SDK exceptions are reliably caught and retried.
 """
-
 import logging
 
 from tenacity import (

@@ -1,26 +1,13 @@
 """
-config.py — central settings
+Central configuration settings and environment loading.
 
-Responsibility: one place for env vars and pipeline-wide constants, so
-nothing downstream hardcodes a model name, a path, or a magic number
-that has to be found and changed in five files later.
-
-We deliberately keep this dependency-light (no pydantic-settings) since
-the project doesn't need validation/typing machinery yet — just reads
-env vars with sane defaults. Upgrade to pydantic BaseSettings later if
-config grows complex enough to need it (e.g. nested settings, secrets
-validation).
-
-ENV LOADING: load_dotenv() reads a .env file in the project root (if
-present) and populates os.environ BEFORE the os.getenv() calls below
-run. This must happen here, at import time, and before any other
-module reads an API key — every other file in this project (embed.py,
-upload.py, retriever.py, etc.) gets its keys by importing FROM this
-module, never by calling os.getenv() directly. That's a deliberate
-single-source-of-truth rule: if API keys were read ad-hoc in multiple
-files, a .env change could silently apply in one place and not
-another, which is exactly the kind of quiet inconsistency this project
-has been actively hunting down elsewhere.
+Architecture & Design Notes:
+- Single Source of Truth: Centralizes environment variables, paths, and constants to prevent 
+  hardcoded magic values across the pipeline. All modules import keys/settings directly from this file.
+- Eager Environment Initialization: Invokes `load_dotenv()` at import time to populate `os.environ` 
+  before any downstream module attempts to access configuration values.
+- Lightweight Implementation: Uses `os.getenv()` with sane defaults instead of heavy configuration 
+  libraries (`pydantic-settings`), maintaining a zero-dependency footprint until complex validation is required.
 """
 
 import os

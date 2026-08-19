@@ -1,40 +1,13 @@
 """
-evaluation/dataset.py — golden evaluation set
+Golden evaluation dataset for RAGAS pipeline benchmarking.
 
-Responsibility: define the question / ground_truth pairs RAGAS scores
-the pipeline against. Nothing else — no RAGAS imports, no scoring
-logic (that's evaluation/run_eval.py's job). Keeping the dataset in
-its own file means it can be inspected, diffed, and grown independently
-of how it gets scored.
-
-PROVENANCE — READ BEFORE ADDING ENTRIES:
-Every entry below is built ONLY from chunk content that was actually
-returned by a real Pipeline.run() call (see the two smoke-test
-transcripts this dataset was seeded from: "How is GPA calculated?" and
-"What are the prerequisites for Machine Learning?"). None of these
-facts were reconstructed from general knowledge of what a Software
-Engineering curriculum "probably" contains — that would risk writing
-plausible-sounding but WRONG ground truth into the one file whose
-entire job is being a trustworthy reference. This mirrors the project's
-existing rule (see chunk.py's bug history) of validating against real
-extracted output rather than assumption.
-
-This is a STARTER set (12 entries), not a complete one. It's
-deliberately narrow because only a handful of chunks have been directly
-observed in this conversation. Expanding it requires either:
-  (a) running more real queries through Pipeline.run() and reading the
-      actual retrieved_chunks back, or
-  (b) grepping your local data/processed/swe_chunks.json directly for
-      known-correct article/course facts.
-Do not add entries from memory or inference — the failure mode this
-guards against is an evaluation set that LOOKS rigorous but silently
-grades the pipeline against wrong answers, which is worse than having
-no evaluation set at all.
-
-CATEGORY FIELD: used by run_eval.py to break down RAGAS scores by
-question type (a single averaged score across categories this
-different would hide, e.g., "regulation questions score well but
-course-prerequisite questions don't").
+Architecture & Design Notes:
+- Separation of Concerns: Isolates golden QA pairs from scoring execution logic (`run_eval.py`), 
+  allowing dataset maintenance and version control independent of evaluation frameworks.
+- Strict Data Provenance: All ground-truth answers are constructed exclusively from verified, 
+  empirically retrieved chunks—never inferred or generalized from memory—ensuring accurate scoring benchmarks.
+- Category Breakdown: Includes a `category` field per test case to enable granular performance analysis 
+  across distinct domains (e.g., regulations vs. course prerequisites) in `run_eval.py`.
 """
 
 from dataclasses import dataclass, field

@@ -1,26 +1,12 @@
 """
-tests/test_chunking.py — unit tests for ingestion/chunk.py
+Unit tests for the chunking module (`ingestion/chunk.py`).
 
-Responsibility: exercise chunk.py's regex/heuristic parsing logic
-against synthetic fixtures. No PDF, no real swe.pdf — chunk.py's input
-(cleaned_pages / full_text strings) is plain data, so every test here
-builds that data directly rather than running the full extract ->
-preprocess -> chunk pipeline. This keeps these tests fast and focused
-on chunk.py's own logic, not extraction or preprocessing correctness
-(those get their own test files).
-
-REGRESSION COVERAGE: three tests here (test_article_boundary_stops_at_
-next_article_marker, test_course_with_no_prerequisites_line_does_not_
-swallow_next_course, test_table_course_prefers_latin_script_name)
-directly reproduce the three real bugs documented in this project's
-history (SWE137 catalog-text bleed, UNI013 swallowing MATH011,
-MATH011's name resolving to Arabic script) using minimal synthetic
-fixtures shaped like the real failure pattern — not the real swe.pdf
-text itself, since that's not available as plain text here. If chunk.py
-is ever refactored, these three tests are the ones most worth keeping
-green: they encode fixes that were found empirically, not derived from
-the code, so losing this coverage would risk silently reintroducing a
-bug that's expensive to catch again.
+Architecture & Design Notes:
+- Isolated Synthetic Testing: Tests chunking heuristics against lightweight string fixtures without 
+  reading PDFs or running upstream pipeline stages (extraction/preprocessing), keeping execution fast.
+- Empirical Regression Coverage: Directly encodes historical regression cases (catalog-text bleed, 
+  course-boundary swallowing, Arabic name-resolution priority) using minimal synthetic fixtures to prevent bug reintroduction.
+- Refactor Safety Net: Serves as the primary validation harness for regex and heuristic updates within `ingestion/chunk.py`.
 """
 
 import sys
